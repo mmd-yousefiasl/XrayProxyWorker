@@ -14,7 +14,7 @@ namespace XrayProxyWorker.Services.Implementations
         private readonly ILatencyTester _latencyTester;
 
         private const int PortPoolStart = 20000;
-        private const int MaxConcurrentTests = 40;
+        private const int MaxConcurrentTests = 30;
         #endregion
 
         #region Ctor
@@ -37,6 +37,12 @@ namespace XrayProxyWorker.Services.Implementations
         {
             if (configs == null || !configs.Any()) return new();
 
+            // حذف تکراری‌ها بر اساس آدرس کامل کانفیگ (بدون در نظر گرفتن نام ظاهری آن)
+            var uniqueConfigs = configs
+                .GroupBy(c => c.Url?.Trim().ToLowerInvariant())
+                .Select(g => g.First())
+                .ToList();
+
             string configPath = Path.Combine(AppContext.BaseDirectory, "base_config.json");
             Process? process = null;
 
@@ -46,7 +52,7 @@ namespace XrayProxyWorker.Services.Implementations
                 _processManager.KillOrphanedWorkerProcesses();
 
                 _logger.LogInformation("Generating master configuration for proxies...");
-                int validConfigCount = _configGenerator.GenerateMasterConfig(configs, configPath, PortPoolStart);
+                int validConfigCount = _configGenerator.GenerateMasterConfig(uniqueConfigs, configPath, PortPoolStart);
 
                 if (validConfigCount == 0)
                 {
@@ -76,11 +82,15 @@ namespace XrayProxyWorker.Services.Implementations
                 }
 
                 _logger.LogInformation("Beginning throttled speed benchmarks...");
-                using var semaphore = new SemaphoreSlim(MaxConcurrentTests);
+                using var semaphore = new SemaphoreSlim(MaxConcurrentTests); // Dropped to 50 for stability
 
                 var tasks = Enumerable.Range(0, validConfigCount).Select(async (index) =>
                 {
                     int assignedPort = PortPoolStart + index;
+
+                    // Introduce a tiny staggered delay based on the index to prevent an initial CPU wall
+                    await Task.Delay(index * 15, ct);
+
                     await semaphore.WaitAsync(ct);
                     try
                     {
