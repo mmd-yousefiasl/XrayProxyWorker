@@ -9,7 +9,7 @@ namespace XrayProxyWorker.Workers
         private readonly IV2RayConfigService _configService;
         private readonly ILogger<FindWorkingConfigs> _logger;
         private readonly IXrayBenchmarkService _benchmarkService;
-        private static readonly TimeSpan ExecutionInterval = TimeSpan.FromMinutes(30);
+        private static readonly int ExecutionInterval = 30;
         private readonly ITelegramPublisher _telegramPublisher;
         #endregion
 
@@ -31,7 +31,7 @@ namespace XrayProxyWorker.Workers
             _logger.LogInformation("Xray Proxy Worker Service initiated. Running benchmark every 30 minutes.");
 
             // Define a strict 30-minute ticking interval
-            using var timer = new PeriodicTimer(TimeSpan.FromMinutes(2));
+            using var timer = new PeriodicTimer(TimeSpan.FromMinutes(ExecutionInterval));
 
             // 1. Run immediately on application startup
             await ExecuteBenchmarkCycleAsync(stoppingToken);
@@ -76,6 +76,7 @@ namespace XrayProxyWorker.Workers
                     var topTenBatch = chunk.ToList();
 
                     await _telegramPublisher.BroadcastTopProxiesAsync(topTenBatch, ct);
+                    await Task.Delay(5000, ct);
                 }
             }
             catch (OperationCanceledException)
