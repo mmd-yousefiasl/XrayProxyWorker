@@ -11,7 +11,7 @@ builder.Services.AddSingleton<IProxyConfigValidator, ProxyConfigValidator>();
 builder.Services.AddSingleton<IXrayConfigGenerator, XrayConfigGenerator>();
 builder.Services.AddSingleton<IProcessManager, XrayProcessManager>();
 builder.Services.AddSingleton<ILatencyTester, SocketsLatencyTester>();
-builder.Services.AddSingleton<ITelegramPublisher, TelegramPublisher>();
+builder.Services.AddHttpClient<ITelegramPublisher, TelegramPublisher>();
 
 // Main orchestration facade service entry point registration mapping
 builder.Services.AddSingleton<IXrayBenchmarkService, XrayBenchmarkService>();

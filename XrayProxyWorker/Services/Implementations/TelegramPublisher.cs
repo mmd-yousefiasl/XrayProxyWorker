@@ -6,15 +6,20 @@ namespace XrayProxyWorker.Services.Implementations
 {
     public class TelegramPublisher : ITelegramPublisher
     {
+        #region Fields
         private readonly ILogger<TelegramPublisher> _logger;
-        private static readonly HttpClient _httpClient = new HttpClient();
-
+        private readonly HttpClient _httpClient;
         private const string ChannelId = "@connect_iran";
+        #endregion
 
-        public TelegramPublisher(ILogger<TelegramPublisher> logger)
+        #region Ctor
+        public TelegramPublisher(ILogger<TelegramPublisher> logger,
+            HttpClient httpClient)
         {
             _logger = logger;
+            _httpClient = httpClient;
         }
+        #endregion
 
         public async Task BroadcastTopProxiesAsync(List<(V2RayConfig Config, long Latency)> topTen, CancellationToken ct)
         {
