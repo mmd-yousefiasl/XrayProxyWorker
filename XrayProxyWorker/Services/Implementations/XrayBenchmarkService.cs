@@ -105,17 +105,17 @@ namespace XrayProxyWorker.Services.Implementations
 
                 var results = await Task.WhenAll(tasks);
                 var validResults = new List<(V2RayConfig Config, long Latency)>();
-                var validatedConfigs = _validator.FilterValidConfigs(configs);
 
+                // ORDER BY LATENCY, BUT PULL DIRECTLY FROM THE DEDUPLICATED ARRAY USED TO BUILD THE PORTS
                 foreach (var res in results.Where(r => r.Success).OrderBy(p => p.Latency))
                 {
-                    if (res.Index < validatedConfigs.Count)
+                    if (res.Index < uniqueConfigs.Count)
                     {
-                        validResults.Add((validatedConfigs[res.Index], res.Latency));
+                        validResults.Add((uniqueConfigs[res.Index], res.Latency));
                     }
                 }
 
-                _logger.LogInformation("Benchmark complete. Found {Count} working proxies.", validResults.Count);
+                _logger.LogInformation("Benchmark complete. Found {Count} accurately matched working proxies.", validResults.Count);
                 return validResults;
             }
             catch (Exception ex)
