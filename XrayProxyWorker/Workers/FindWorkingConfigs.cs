@@ -9,7 +9,7 @@ namespace XrayProxyWorker.Workers
         private readonly IV2RayConfigService _configService;
         private readonly ILogger<FindWorkingConfigs> _logger;
         private readonly IXrayBenchmarkService _benchmarkService;
-        private static readonly int ExecutionInterval = 30;
+        private static readonly int ExecutionInterval = 60;
         private readonly ITelegramPublisher _telegramPublisher;
         #endregion
 
@@ -68,7 +68,7 @@ namespace XrayProxyWorker.Workers
 
                 var proxyChunks = sortedResults
                     .Chunk(10)
-                    .Take(2)
+                    .Take(3)
                     .ToList();
 
                 foreach (var chunk in proxyChunks)

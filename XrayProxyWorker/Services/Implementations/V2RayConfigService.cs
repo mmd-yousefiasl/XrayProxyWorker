@@ -62,6 +62,7 @@ namespace XrayProxyWorker.Services.Implementations
                 .Select(c => c.ToV2RayConfig())
                 .Where(config => config is not null)
                 .Cast<V2RayConfig>()
+                .DistinctBy(c => c.Address)
                 .ToList();
 
             return parsedConfigs;
