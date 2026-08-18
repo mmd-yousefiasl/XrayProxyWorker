@@ -1,13 +1,24 @@
 ﻿namespace XrayProxyWorker.Dtos
 {
-    public class V2RayConfig
+    namespace XrayProxyWorker.Dtos
     {
-        public string Protocol { get; set; } = string.Empty; // e.g., "vless"
-        public string Address { get; set; } = string.Empty;
-        public int Port { get; set; }
-        public string UserId { get; set; } = string.Empty; // UUID
-        public string Name { get; set; } = string.Empty; // The text after #
-        public Dictionary<string, string> Parameters { get; set; } = new();
-        public string Url { get; set; }
+        public class V2RayConfig
+        {
+            public string Protocol { get; set; } = string.Empty;
+
+            public string Address { get; set; } = string.Empty;
+
+            public int Port { get; set; }
+
+            public string UserId { get; set; } = string.Empty;
+
+            public string Name { get; set; } = string.Empty;
+
+            public Dictionary<string, string> Parameters { get; set; }
+                = new(StringComparer.OrdinalIgnoreCase);
+
+            // Always preserve the original URI.
+            public string Url { get; set; } = string.Empty;
+        }
     }
 }

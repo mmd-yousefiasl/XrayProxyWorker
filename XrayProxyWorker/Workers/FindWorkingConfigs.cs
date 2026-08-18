@@ -1,4 +1,4 @@
-﻿using XrayProxyWorker.Dtos;
+﻿using XrayProxyWorker.Dtos.XrayProxyWorker.Dtos;
 using XrayProxyWorker.Services.Interfaces;
 using XrayProxyWorker.Tools;
 
@@ -83,7 +83,7 @@ namespace XrayProxyWorker.Workers
                             ct);
 
                     var workingConfigs = results
-                        .OrderBy(x => x.Latency)
+                        .OrderBy(x => x.LatencyMs)
                         .ToList();
 
                     Console.WriteLine();

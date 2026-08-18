@@ -60,8 +60,15 @@ namespace XrayProxyWorker.Services.Implementations
                 }
             };
 
-            process.OutputDataReceived += (s, e) => HandleLog(e.Data, isError: false);
-            process.ErrorDataReceived += (s, e) => HandleLog(e.Data, isError: true);
+            process.OutputDataReceived += (s, e) =>
+            {
+                // Ignore normal Xray stdout.
+            };
+
+            process.ErrorDataReceived += (s, e) =>
+            {
+                // Ignore individual proxy connection errors.
+            };
 
             return process;
         }

@@ -9,7 +9,7 @@
 
   <ItemGroup>
     <None Include="..\..\..\..\Desktop\Connect_iran\Core\xray.exe" Link="Core\xray.exe">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
 

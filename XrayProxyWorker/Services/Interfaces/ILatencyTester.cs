@@ -1,7 +1,11 @@
-﻿namespace XrayProxyWorker.Services.Interfaces
+﻿using XrayProxyWorker.Dtos;
+
+namespace XrayProxyWorker.Services.Interfaces
 {
     public interface ILatencyTester
     {
-        Task<long> TestPortLatencyAsync(int port, CancellationToken ct);
+        Task<ProxyTestResult> TestPortLatencyAsync(
+            int port,
+            CancellationToken ct);
     }
 }

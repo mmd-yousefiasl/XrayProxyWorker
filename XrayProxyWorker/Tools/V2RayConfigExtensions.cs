@@ -2,7 +2,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using XrayProxyWorker.Dtos;
+using XrayProxyWorker.Dtos.XrayProxyWorker.Dtos;
 
 namespace XrayProxyWorker.Tools
 {

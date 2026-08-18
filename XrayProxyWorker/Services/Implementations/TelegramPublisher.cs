@@ -1,7 +1,7 @@
 ﻿using System.Net;
 using System.Text;
 using System.Text.Json;
-using XrayProxyWorker.Dtos;
+using XrayProxyWorker.Dtos.XrayProxyWorker.Dtos;
 using XrayProxyWorker.Services.Interfaces;
 
 namespace XrayProxyWorker.Services.Implementations

@@ -1,4 +1,4 @@
-﻿using XrayProxyWorker.Dtos;
+﻿using XrayProxyWorker.Dtos.XrayProxyWorker.Dtos;
 
 namespace XrayProxyWorker.Services.Interfaces
 {

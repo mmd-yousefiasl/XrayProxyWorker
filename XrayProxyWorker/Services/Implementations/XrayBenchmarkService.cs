@@ -1,101 +1,147 @@
 ﻿using System.Diagnostics;
 using XrayProxyWorker.Dtos;
+using XrayProxyWorker.Dtos.XrayProxyWorker.Dtos;
 using XrayProxyWorker.Services.Interfaces;
 
 namespace XrayProxyWorker.Services.Implementations
 {
     public class XrayBenchmarkService : IXrayBenchmarkService
     {
-        #region Fields
         private readonly ILogger<XrayBenchmarkService> _logger;
-        private readonly IProxyConfigValidator _validator;
         private readonly IXrayConfigGenerator _configGenerator;
         private readonly IProcessManager _processManager;
-        private readonly ILatencyTester _latencyTester;
+        private readonly ILatencyTester _tester;
 
         private const int PortPoolStart = 20000;
         private const int MaxConcurrentTests = 30;
-        #endregion
+        private const int XrayStartupDelayMs = 4000;
 
-        #region Ctor
         public XrayBenchmarkService(
             ILogger<XrayBenchmarkService> logger,
-            IProxyConfigValidator validator,
             IXrayConfigGenerator configGenerator,
             IProcessManager processManager,
-            ILatencyTester latencyTester)
+            ILatencyTester tester)
         {
             _logger = logger;
-            _validator = validator;
             _configGenerator = configGenerator;
             _processManager = processManager;
-            _latencyTester = latencyTester;
+            _tester = tester;
         }
-        #endregion
 
-        public async Task<List<(V2RayConfig Config, long Latency)>> FindAllFastProxiesAsync(List<V2RayConfig> configs, CancellationToken ct)
+        public async Task<List<ProxyBenchmarkResult>> FindAllFastProxiesAsync(
+            List<V2RayConfig> configs,
+            CancellationToken ct)
         {
-            if (configs == null || !configs.Any()) return new();
+            if (configs == null || configs.Count == 0)
+                return new();
 
-            // حذف تکراری‌ها بر اساس آدرس کامل کانفیگ (بدون در نظر گرفتن نام ظاهری آن)
             var uniqueConfigs = configs
-                .GroupBy(c => c.Url?.Trim().ToLowerInvariant())
+                .Where(c => !string.IsNullOrWhiteSpace(c.Url))
+                .GroupBy(
+                    c => c.Url.Trim(),
+                    StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First())
                 .ToList();
 
-            string configPath = Path.Combine(AppContext.BaseDirectory, "base_config.json");
+            if (uniqueConfigs.Count == 0)
+                return new();
+
+            string configPath = Path.Combine(
+                AppContext.BaseDirectory,
+                "base_config.json");
+
             Process? process = null;
 
             try
             {
-                // Clean up old instances using Process Manager
                 _processManager.KillOrphanedWorkerProcesses();
 
-                _logger.LogInformation("Generating master configuration for proxies...");
-                int validConfigCount = _configGenerator.GenerateMasterConfig(uniqueConfigs, configPath, PortPoolStart);
+                var generated = _configGenerator.GenerateMasterConfig(
+                    uniqueConfigs,
+                    configPath,
+                    PortPoolStart);
 
-                if (validConfigCount == 0)
+                if (generated.Count == 0)
                 {
-                    _logger.LogWarning("All provided configurations failed basic structural validation checks.");
+                    _logger.LogWarning(
+                        "No valid proxies were generated.");
+
                     return new();
                 }
 
-                // Build core runtime engine loop configuration parameters
                 process = _processManager.StartXrayEngine(configPath);
 
-                _logger.LogInformation("Starting persistent Xray Core wrapper...");
                 if (!process.Start())
                 {
-                    _logger.LogError("Failed to start Xray core process engine.");
+                    _logger.LogError("Unable to start Xray.");
                     return new();
                 }
 
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
 
-                await Task.Delay(4000, ct); // Wait initialization
+                await Task.Delay(XrayStartupDelayMs, ct);
 
                 if (process.HasExited)
                 {
-                    _logger.LogError("Xray core exited prematurely during initialization.");
+                    _logger.LogError(
+                        "Xray exited before benchmark began.");
+
                     return new();
                 }
 
-                _logger.LogInformation("Beginning throttled speed benchmarks...");
-                using var semaphore = new SemaphoreSlim(MaxConcurrentTests); // Dropped to 50 for stability
+                Console.WriteLine();
+                Console.WriteLine($"Testing {generated.Count} proxies...");
+                Console.WriteLine();
 
-                var tasks = Enumerable.Range(0, validConfigCount).Select(async (index) =>
+                using var semaphore = new SemaphoreSlim(MaxConcurrentTests);
+
+                int completed = 0;
+                double bestSpeed = 0;
+
+                var tasks = generated.Select(async generatedProxy =>
                 {
-                    int assignedPort = PortPoolStart + index;
-
-                    // Introduce a tiny staggered delay based on the index to prevent an initial CPU wall
-                    await Task.Delay(index * 15, ct);
-
                     await semaphore.WaitAsync(ct);
+
                     try
                     {
-                        var latency = await _latencyTester.TestPortLatencyAsync(assignedPort, ct);
-                        return (Index: index, Latency: latency, Success: latency < long.MaxValue);
+                        var test = await _tester.TestPortLatencyAsync(
+                            generatedProxy.Port,
+                            ct);
+
+                        int current = Interlocked.Increment(ref completed);
+
+                        // Progress indicator
+                        Console.Write("#");
+
+                        // Every 25 completed tests show progress
+                        if (current % 25 == 0 || current == generated.Count)
+                        {
+                            lock (Console.Out)
+                            {
+                                Console.WriteLine(
+                                    $" {current}/{generated.Count} | Best: {bestSpeed:F2} Mbps");
+                            }
+                        }
+
+                        if (!test.Success)
+                            return null;
+
+                        // Update best speed safely
+                        double currentBest;
+
+                        lock (Console.Out)
+                        {
+                            if (test.DownloadMbps > bestSpeed)
+                                bestSpeed = test.DownloadMbps;
+
+                            currentBest = bestSpeed;
+                        }
+
+                        return new ProxyBenchmarkResult(
+                            generatedProxy.Config,
+                            test.LatencyMs,
+                            test.DownloadMbps);
                     }
                     finally
                     {
@@ -104,35 +150,56 @@ namespace XrayProxyWorker.Services.Implementations
                 });
 
                 var results = await Task.WhenAll(tasks);
-                var validResults = new List<(V2RayConfig Config, long Latency)>();
 
-                // ORDER BY LATENCY, BUT PULL DIRECTLY FROM THE DEDUPLICATED ARRAY USED TO BUILD THE PORTS
-                foreach (var res in results.Where(r => r.Success).OrderBy(p => p.Latency))
-                {
-                    if (res.Index < uniqueConfigs.Count)
-                    {
-                        validResults.Add((uniqueConfigs[res.Index], res.Latency));
-                    }
-                }
+                var working = results
+                    .Where(x => x != null)
+                    .Select(x => x!)
+                    .OrderByDescending(x => x.DownloadMbps)
+                    .ThenBy(x => x.LatencyMs)
+                    .ToList();
 
-                _logger.LogInformation("Benchmark complete. Found {Count} accurately matched working proxies.", validResults.Count);
-                return validResults;
+                Console.WriteLine();
+                Console.WriteLine(
+                    $"Working proxies: {working.Count}/{generated.Count}");
+
+                _logger.LogInformation(
+                    "Benchmark complete. {Working}/{Total} proxies working.",
+                    working.Count,
+                    generated.Count);
+
+                return working;
             }
-            catch (Exception ex)
+            catch (OperationCanceledException)
             {
-                _logger.LogError(ex, "An unhandled execution error occurred while processing core benchmarks.");
-                return new();
+                Console.WriteLine();
+                Console.WriteLine("Benchmark cancelled.");
+                throw;
             }
             finally
             {
-                if (process != null && !process.HasExited)
+                try
                 {
-                    try { process.Kill(true); } catch { }
-                    process.Dispose();
+                    if (process != null && !process.HasExited)
+                    {
+                        process.Kill(true);
+                        process.WaitForExit(3000);
+                    }
                 }
-                if (File.Exists(configPath))
+                catch
                 {
-                    try { File.Delete(configPath); } catch { }
+                }
+                finally
+                {
+                    process?.Dispose();
+                }
+
+                try
+                {
+                    if (File.Exists(configPath))
+                        File.Delete(configPath);
+                }
+                catch
+                {
                 }
             }
         }
