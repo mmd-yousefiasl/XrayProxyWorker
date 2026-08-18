@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.WebUtilities;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using XrayProxyWorker.Dtos;
 
 namespace XrayProxyWorker.Tools
@@ -109,6 +110,49 @@ namespace XrayProxyWorker.Tools
             {
                 return null; // در صورت خرابی دیتای بیس۶۴
             }
+        }
+
+        private static readonly Regex GitHubFileRegex = new(
+            @"^https?://github\.com/(?<owner>[^/]+)/(?<repo>[^/]+)/blob/(?<branch>[^/]+)/(?<path>.+)$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        public static bool TryGetRawContentUrl(
+            this string? url,
+            out string rawUrl)
+        {
+            rawUrl = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(url))
+                return false;
+
+            url = url.Trim();
+
+            // Already a raw GitHub URL
+            if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+                uri.Scheme is "http" or "https" &&
+                uri.Host.Equals(
+                    "raw.githubusercontent.com",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                rawUrl = uri.ToString();
+                return true;
+            }
+
+            // Normal GitHub file URL
+            var match = GitHubFileRegex.Match(url);
+
+            if (!match.Success)
+                return false;
+
+            var owner = match.Groups["owner"].Value;
+            var repo = match.Groups["repo"].Value;
+            var branch = match.Groups["branch"].Value;
+            var path = match.Groups["path"].Value;
+
+            rawUrl =
+                $"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}";
+
+            return true;
         }
     }
 }

@@ -1,92 +1,133 @@
 ﻿using XrayProxyWorker.Dtos;
 using XrayProxyWorker.Services.Interfaces;
+using XrayProxyWorker.Tools;
 
 namespace XrayProxyWorker.Workers
 {
-    public class FindWorkingConfigs : BackgroundService
+    public class ConsoleRunner
     {
-        #region Fields
         private readonly IV2RayConfigService _configService;
-        private readonly ILogger<FindWorkingConfigs> _logger;
         private readonly IXrayBenchmarkService _benchmarkService;
-        private static readonly int ExecutionInterval = 60;
-        private readonly ITelegramPublisher _telegramPublisher;
-        #endregion
+        private readonly ILogger<ConsoleRunner> _logger;
 
-        #region Ctor
-        public FindWorkingConfigs(IV2RayConfigService configService,
+        public ConsoleRunner(
+            IV2RayConfigService configService,
             IXrayBenchmarkService benchmarkService,
-            ILogger<FindWorkingConfigs> logger,
-            ITelegramPublisher telegramPublisher)
+            ILogger<ConsoleRunner> logger)
         {
             _configService = configService;
             _benchmarkService = benchmarkService;
             _logger = logger;
-            _telegramPublisher = telegramPublisher;
-        }
-        #endregion
-
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-        {
-            _logger.LogInformation("Xray Proxy Worker Service initiated. Running benchmark every 30 minutes.");
-
-            // Define a strict 30-minute ticking interval
-            using var timer = new PeriodicTimer(TimeSpan.FromMinutes(ExecutionInterval));
-
-            // 1. Run immediately on application startup
-            await ExecuteBenchmarkCycleAsync(stoppingToken);
-
-            // 2. Wait exactly 30 minutes between each subsequent execution
-            while (await timer.WaitForNextTickAsync(stoppingToken))
-            {
-                await ExecuteBenchmarkCycleAsync(stoppingToken);
-            }
         }
 
-        private async Task ExecuteBenchmarkCycleAsync(CancellationToken ct)
+        public async Task RunAsync(CancellationToken ct)
         {
-            try
+            Console.WriteLine("========================================");
+            Console.WriteLine("       XRAY PROXY CONFIG TESTER");
+            Console.WriteLine("========================================");
+            Console.WriteLine();
+
+            while (!ct.IsCancellationRequested)
             {
-                _logger.LogInformation("Starting scheduled 30-minute proxy processing loop at: {Time}", DateTimeOffset.Now);
+                Console.Write("Enter GitHub config URL (or 'exit'): ");
 
-                // 1. Fetch your raw configurations list
-                List<V2RayConfig> rawConfigs = await _configService.GetConfigsAsync();
+                string? input = Console.ReadLine()?.Trim();
 
-                if (rawConfigs == null || rawConfigs.Count == 0)
+                if (string.IsNullOrWhiteSpace(input))
+                    continue;
+
+                if (input.Equals("exit", StringComparison.OrdinalIgnoreCase))
+                    break;
+
+                if (!input.TryGetRawContentUrl(out string rawUrl))
                 {
-                    _logger.LogWarning("No raw configurations retrieved. Skipping benchmark run.");
-                    return;
+                    Console.WriteLine();
+                    Console.WriteLine("Invalid GitHub URL.");
+                    Console.WriteLine(
+                        "Please enter a GitHub file URL such as:");
+                    Console.WriteLine(
+                        "https://github.com/user/repository/blob/main/Sub1.txt");
+                    Console.WriteLine();
+                    continue;
                 }
 
-                // 2. Pass them to your SOLID orchestrated benchmark engine
-                List<(V2RayConfig Config, long Latency)> benchmarkResults =
-                    await _benchmarkService.FindAllFastProxiesAsync(rawConfigs, ct);
-
-                var sortedResults = benchmarkResults
-                    .OrderBy(x => x.Latency)
-                    .ToList();
-
-                var proxyChunks = sortedResults
-                    .Chunk(10)
-                    .Take(3)
-                    .ToList();
-
-                foreach (var chunk in proxyChunks)
+                try
                 {
-                    var topTenBatch = chunk.ToList();
+                    Console.WriteLine();
+                    Console.WriteLine($"Raw URL:");
+                    Console.WriteLine(rawUrl);
+                    Console.WriteLine();
 
-                    await _telegramPublisher.BroadcastTopProxiesAsync(topTenBatch, ct);
-                    await Task.Delay(5000, ct);
+                    Console.WriteLine("Downloading configs...");
+
+                    List<V2RayConfig> configs =
+                        await _configService.GetConfigsAsync(rawUrl);
+
+                    if (configs == null || configs.Count == 0)
+                    {
+                        Console.WriteLine("No configs were found.");
+                        Console.WriteLine();
+                        continue;
+                    }
+
+                    Console.WriteLine(
+                        $"Downloaded {configs.Count} configs.");
+
+                    Console.WriteLine();
+                    Console.WriteLine("Testing configs...");
+                    Console.WriteLine();
+
+                    var results =
+                        await _benchmarkService.FindAllFastProxiesAsync(
+                            configs,
+                            ct);
+
+                    var workingConfigs = results
+                        .OrderBy(x => x.Latency)
+                        .ToList();
+
+                    Console.WriteLine();
+                    Console.WriteLine("========================================");
+                    Console.WriteLine("           WORKING CONFIGS");
+                    Console.WriteLine("========================================");
+
+                    if (workingConfigs.Count == 0)
+                    {
+                        Console.WriteLine("No working configs found.");
+                    }
+                    else
+                    {
+                        for (int i = 0; i < workingConfigs.Count; i++)
+                        {
+                            var item = workingConfigs[i];
+                            Console.WriteLine(item.Config.Url);
+                        }
+                    }
+
+                    Console.WriteLine();
+                    Console.WriteLine(
+                        $"Finished. {workingConfigs.Count} working configs found.");
+
+                    Console.WriteLine();
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Error while processing subscription.");
+
+                    Console.WriteLine();
+                    Console.WriteLine(
+                        $"ERROR: {ex.Message}");
+                    Console.WriteLine();
                 }
             }
-            catch (OperationCanceledException)
-            {
-                _logger.LogWarning("The proxy scanning sequence execution was cancelled via system shutdown request.");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "An unhandled critical fault occurred during the background benchmark execution cycle.");
-            }
+
+            Console.WriteLine("Shutting down...");
         }
     }
 }

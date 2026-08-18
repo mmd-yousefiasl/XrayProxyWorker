@@ -6,18 +6,28 @@ var builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.AddHttpClient<IV2RayConfigService, V2RayConfigService>();
 
-// Register individual SOLID services
 builder.Services.AddSingleton<IProxyConfigValidator, ProxyConfigValidator>();
 builder.Services.AddSingleton<IXrayConfigGenerator, XrayConfigGenerator>();
 builder.Services.AddSingleton<IProcessManager, XrayProcessManager>();
 builder.Services.AddSingleton<ILatencyTester, SocketsLatencyTester>();
+
 builder.Services.AddHttpClient<ITelegramPublisher, TelegramPublisher>();
 
-// Main orchestration facade service entry point registration mapping
 builder.Services.AddSingleton<IXrayBenchmarkService, XrayBenchmarkService>();
 
-builder.Services.AddHostedService<FindWorkingConfigs>();
-
+// Interactive console runner
+builder.Services.AddSingleton<ConsoleRunner>();
 
 var host = builder.Build();
-host.Run();
+
+using var cts = new CancellationTokenSource();
+
+Console.CancelKeyPress += (sender, e) =>
+{
+    e.Cancel = true;
+    cts.Cancel();
+};
+
+var runner = host.Services.GetRequiredService<ConsoleRunner>();
+
+await runner.RunAsync(cts.Token);

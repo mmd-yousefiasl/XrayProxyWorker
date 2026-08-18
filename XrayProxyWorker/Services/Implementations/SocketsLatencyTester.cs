@@ -14,18 +14,29 @@ namespace XrayProxyWorker.Services.Implementations
                 {
                     Proxy = new WebProxy($"socks5://127.0.0.1:{port}"),
                     UseProxy = true,
-                    ConnectTimeout = TimeSpan.FromMilliseconds(3000)
+                    ConnectTimeout = TimeSpan.FromSeconds(8)
                 };
 
-                using var client = new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(5000) };
+                using var client = new HttpClient(handler)
+                {
+                    Timeout = TimeSpan.FromSeconds(10)
+                };
 
                 var sw = Stopwatch.StartNew();
-                using var response = await client.GetAsync("https://www.google.com/generate_204", ct);
+
+                using var response = await client.GetAsync(
+                    "https://www.google.com/generate_204",
+                    ct);
+
                 sw.Stop();
 
-                if (response.IsSuccessStatusCode) return sw.ElapsedMilliseconds;
+                if (response.IsSuccessStatusCode)
+                    return sw.ElapsedMilliseconds;
             }
-            catch { /* Suppress benchmark connection timeouts */ }
+            catch
+            {
+                // Proxy failed or timed out
+            }
 
             return long.MaxValue;
         }

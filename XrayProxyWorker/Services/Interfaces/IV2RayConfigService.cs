@@ -4,6 +4,6 @@ namespace XrayProxyWorker.Services.Interfaces
 {
     public interface IV2RayConfigService
     {
-        Task<List<V2RayConfig>> GetConfigsAsync();
+        Task<List<V2RayConfig>> GetConfigsAsync(string configsUrl);
     }
 }
