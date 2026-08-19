@@ -8,16 +8,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Remove="Core\xray" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <EmbeddedResource Include="..\..\..\..\Desktop\Connect_iran\Core\xray.exe" Link="Core\xray.exe">
+    <None Include="..\..\..\..\Desktop\Connect_iran\Core\xray.exe" Link="Core\xray.exe">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Core\xray">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </EmbeddedResource>
+    </None>
   </ItemGroup>
 
   <ItemGroup>
@@ -35,6 +28,9 @@
 	  </None>
 	  <None Update="Core\geosite.dat">
 		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </None>
+	  <None Update="Core\xray">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </None>
   </ItemGroup>
 </Project>
