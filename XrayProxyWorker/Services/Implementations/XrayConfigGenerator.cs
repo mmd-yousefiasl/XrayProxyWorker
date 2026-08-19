@@ -305,7 +305,8 @@ namespace XrayProxyWorker.Services.Implementations
                     defaultValue: "tcp") ?? "tcp";
 
             security = security.Trim().ToLowerInvariant();
-            network = network.Trim().ToLowerInvariant();
+            network = NormalizeNetwork(
+                network.Trim().ToLowerInvariant());
 
             // ---------------------------------------------------------
             // Trojan always uses TLS unless explicitly handled otherwise.
@@ -322,18 +323,15 @@ namespace XrayProxyWorker.Services.Implementations
             // Validate transport
             // ---------------------------------------------------------
 
-            var allowedNetworks = new HashSet<string>(
-                StringComparer.OrdinalIgnoreCase)
-    {
-        "tcp",
-        "ws",
-        "grpc",
-        "http",
-        "httpupgrade",
-        "splithttp",
-        "xhttp",
-        "quic"
-    };
+            var allowedNetworks = new HashSet<string>
+{
+    "tcp",
+    "ws",
+    "grpc",
+    "httpupgrade",
+    "xhttp",
+    "quic"
+};
 
             if (!allowedNetworks.Contains(network))
             {
@@ -443,6 +441,17 @@ namespace XrayProxyWorker.Services.Implementations
                         "sid",
                         "shortId");
 
+                if (!string.IsNullOrWhiteSpace(shortId))
+                {
+                    shortId = shortId.Trim();
+
+                    if (!IsValidRealityShortId(shortId))
+                    {
+                        throw new InvalidOperationException(
+                            $"Invalid Reality shortId '{shortId}' for {proxy.Url}");
+                    }
+                }
+
                 if (string.IsNullOrWhiteSpace(publicKey))
                 {
                     throw new InvalidOperationException(
@@ -537,33 +546,34 @@ namespace XrayProxyWorker.Services.Implementations
             }
 
             // ---------------------------------------------------------
-            // HTTP
+            // XHTTP
             // ---------------------------------------------------------
 
-            if (network == "http")
+            if (network == "xhttp")
             {
-                string? host =
-                    GetParameter(
-                        proxy,
-                        "host");
-
                 string? path =
                     GetParameter(
                         proxy,
                         "path");
 
-                streamSettings["httpSettings"] =
+                string? mode =
+                    GetParameter(
+                        proxy,
+                        "mode");
+
+
+                streamSettings["xhttpSettings"] =
                     new
                     {
-                        host =
-                            string.IsNullOrWhiteSpace(host)
-                                ? Array.Empty<string>()
-                                : new[] { host },
-
                         path =
                             string.IsNullOrWhiteSpace(path)
                                 ? "/"
-                                : path
+                                : path,
+
+                        mode =
+                            string.IsNullOrWhiteSpace(mode)
+                                ? "auto"
+                                : mode
                     };
             }
 
@@ -622,6 +632,29 @@ namespace XrayProxyWorker.Services.Implementations
                     throw new InvalidOperationException(
                         $"Unsupported Shadowsocks cipher '{method}'.")
             };
+        }
+
+        private static string NormalizeNetwork(string network)
+        {
+            return network switch
+            {
+                "http" => "xhttp",
+
+                "splithttp" => "xhttp",
+
+                _ => network
+            };
+        }
+
+        private static bool IsValidRealityShortId(string value)
+        {
+            if (value.Length > 16)
+                return false;
+
+            if (value.Length % 2 != 0)
+                return false;
+
+            return value.All(Uri.IsHexDigit);
         }
     }
 }

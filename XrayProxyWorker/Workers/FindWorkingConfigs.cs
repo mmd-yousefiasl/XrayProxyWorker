@@ -97,10 +97,20 @@ namespace XrayProxyWorker.Workers
                     }
                     else
                     {
-                        for (int i = 0; i < workingConfigs.Count; i++)
+                        foreach (var item in workingConfigs)
                         {
-                            var item = workingConfigs[i];
-                            Console.WriteLine(item.Config.Url);
+                            var url = item.Config.Url;
+
+                            int hashIndex = url.IndexOf('#');
+
+                            if (hashIndex >= 0)
+                            {
+                                url = url[..hashIndex];
+                            }
+
+                            url += "#telegram@connect_iran";
+
+                            Console.WriteLine(url);
                         }
                     }
 

@@ -18,7 +18,7 @@ namespace XrayProxyWorker.Services.Implementations
 
         public async Task<List<V2RayConfig>> GetConfigsAsync(string configsUrl)
         {
-            const int MaxConfigs = 250;
+            const int MaxConfigs = 500;
 
             var protocols = new[]
             {
@@ -50,10 +50,9 @@ namespace XrayProxyWorker.Services.Implementations
                     .Select(line => line.ToV2RayConfig())
                     .Where(config => config is not null)
                     .Cast<V2RayConfig>()
-                    // Deduplicate the actual config, not just the server address
                     .DistinctBy(c =>
-                        c.Url?.Trim(),
-                        StringComparer.OrdinalIgnoreCase)
+                       NormalizeProxyUrl(c.Url),
+                       StringComparer.OrdinalIgnoreCase)
                     .Take(MaxConfigs)
                     .ToList();
 
@@ -73,6 +72,24 @@ namespace XrayProxyWorker.Services.Implementations
 
                 return new List<V2RayConfig>();
             }
+        }
+
+        private static string NormalizeProxyUrl(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+                return string.Empty;
+
+            url = url.Trim();
+
+            // Remove remark
+            int hashIndex = url.IndexOf('#');
+
+            if (hashIndex >= 0)
+            {
+                url = url[..hashIndex];
+            }
+
+            return url.ToLowerInvariant();
         }
     }
 }
