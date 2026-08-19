@@ -69,6 +69,25 @@ namespace XrayProxyWorker.Services.Implementations
                     return new();
                 }
 
+                _logger.LogInformation(
+    "Validating generated Xray configuration...");
+
+                bool configValid =
+                    await _processManager.ValidateConfigAsync(
+                        configPath,
+                        ct);
+
+                if (!configValid)
+                {
+                    _logger.LogError(
+                        "Generated Xray configuration is invalid. Benchmark aborted.");
+
+                    return new();
+                }
+
+                _logger.LogInformation(
+                    "Xray configuration is valid.");
+
                 process = _processManager.StartXrayEngine(configPath);
 
                 if (!process.Start())
@@ -94,10 +113,17 @@ namespace XrayProxyWorker.Services.Implementations
                 Console.WriteLine($"Testing {generated.Count} proxies...");
                 Console.WriteLine();
 
-                using var semaphore = new SemaphoreSlim(MaxConcurrentTests);
+                using var semaphore =
+                    new SemaphoreSlim(MaxConcurrentTests);
+
+                const int barWidth = 40;
 
                 int completed = 0;
-                double bestSpeed = 0;
+                int workingCount = 0;
+                int failedCount = 0;
+
+                var benchmarkStopwatch =
+                    Stopwatch.StartNew();
 
                 var tasks = generated.Select(async generatedProxy =>
                 {
@@ -105,38 +131,20 @@ namespace XrayProxyWorker.Services.Implementations
 
                     try
                     {
-                        var test = await _tester.TestPortLatencyAsync(
-                            generatedProxy.Port,
-                            ct);
+                        var test =
+                            await _tester.TestPortLatencyAsync(
+                                generatedProxy.Port,
+                                ct);
 
-                        int current = Interlocked.Increment(ref completed);
-
-                        // Progress indicator
-                        Console.Write("#");
-
-                        // Every 25 completed tests show progress
-                        if (current % 25 == 0 || current == generated.Count)
-                        {
-                            lock (Console.Out)
-                            {
-                                Console.WriteLine(
-                                    $" {current}/{generated.Count} | Best: {bestSpeed:F2} Mbps");
-                            }
-                        }
+                        Interlocked.Increment(ref completed);
 
                         if (!test.Success)
-                            return null;
-
-                        // Update best speed safely
-                        double currentBest;
-
-                        lock (Console.Out)
                         {
-                            if (test.DownloadMbps > bestSpeed)
-                                bestSpeed = test.DownloadMbps;
-
-                            currentBest = bestSpeed;
+                            Interlocked.Increment(ref failedCount);
+                            return null;
                         }
+
+                        Interlocked.Increment(ref workingCount);
 
                         return new ProxyBenchmarkResult(
                             generatedProxy.Config,
@@ -147,9 +155,91 @@ namespace XrayProxyWorker.Services.Implementations
                     {
                         semaphore.Release();
                     }
-                });
+                }).ToList();
 
-                var results = await Task.WhenAll(tasks);
+
+                // ---------------------------------------------------------
+                // Live progress display
+                // Updates every 250ms even when no proxy finishes.
+                // ---------------------------------------------------------
+
+                var progressTask = Task.Run(async () =>
+                {
+                    try
+                    {
+                        while (!ct.IsCancellationRequested)
+                        {
+                            int current =
+                                Volatile.Read(ref completed);
+
+                            if (current >= generated.Count)
+                                break;
+
+                            int currentWorking =
+                                Volatile.Read(ref workingCount);
+
+                            int currentFailed =
+                                Volatile.Read(ref failedCount);
+
+                            double progress =
+                                generated.Count == 0
+                                    ? 0
+                                    : (double)current / generated.Count;
+
+                            int filled =
+                                (int)(progress * barWidth);
+
+                            string bar =
+                                new string('#', filled) +
+                                new string('.', barWidth - filled);
+
+                            Console.Write(
+                                $"\r[{bar}] " +
+                                $"{current}/{generated.Count} " +
+                                $"| Working: {currentWorking} " +
+                                $"| Failed: {currentFailed} " +
+                                $"| {benchmarkStopwatch.Elapsed:mm\\:ss}");
+
+                            await Task.Delay(250, ct);
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+                }, ct);
+
+
+                // ---------------------------------------------------------
+                // Wait for all proxy tests.
+                // ---------------------------------------------------------
+
+                var results =
+                    await Task.WhenAll(tasks);
+
+                benchmarkStopwatch.Stop();
+
+                try
+                {
+                    await progressTask;
+                }
+                catch (OperationCanceledException)
+                {
+                }
+
+
+                // ---------------------------------------------------------
+                // Final progress line
+                // ---------------------------------------------------------
+
+                Console.Write(
+                    $"\r[{new string('#', barWidth)}] " +
+                    $"{generated.Count}/{generated.Count} " +
+                    $"| Working: {workingCount} " +
+                    $"| Failed: {failedCount} " +
+                    $"| {benchmarkStopwatch.Elapsed:mm\\:ss}");
+
+                Console.WriteLine();
+                Console.WriteLine();
 
                 var working = results
                     .Where(x => x != null)

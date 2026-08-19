@@ -6,5 +6,9 @@ namespace XrayProxyWorker.Services.Interfaces
     {
         void KillOrphanedWorkerProcesses();
         Process StartXrayEngine(string configPath);
+
+        Task<bool> ValidateConfigAsync(
+            string configPath,
+            CancellationToken ct);
     }
 }

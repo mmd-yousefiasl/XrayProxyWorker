@@ -257,23 +257,30 @@ namespace XrayProxyWorker.Services.Implementations
                 case "shadowsocks":
                     {
                         string method =
-                            GetParameter(
-                                proxy,
-                                "method",
-                                "aes-256-gcm")!;
+                            GetParameter(proxy, "method")
+                            ?? throw new InvalidOperationException(
+                                $"Shadowsocks config is missing cipher method: {proxy.Url}");
+
+                        method = NormalizeShadowsocksMethod(method);
+
+                        if (string.IsNullOrWhiteSpace(proxy.UserId))
+                        {
+                            throw new InvalidOperationException(
+                                $"Shadowsocks config is missing password: {proxy.Url}");
+                        }
 
                         return new
                         {
                             servers = new[]
                             {
-                            new
-                            {
-                                address = proxy.Address,
-                                port = proxy.Port,
-                                method,
-                                password = proxy.UserId
-                            }
-                        }
+            new
+            {
+                address = proxy.Address,
+                port = proxy.Port,
+                method,
+                password = proxy.UserId
+            }
+        }
                         };
                     }
 
@@ -587,6 +594,34 @@ namespace XrayProxyWorker.Services.Implementations
             }
 
             return defaultValue;
+        }
+
+        private static string NormalizeShadowsocksMethod(string method)
+        {
+            method = method
+                .Trim()
+                .ToLowerInvariant();
+
+            return method switch
+            {
+                "aes-128-gcm" => "aes-128-gcm",
+                "aes-256-gcm" => "aes-256-gcm",
+
+                "chacha20-ietf-poly1305" =>
+                    "chacha20-ietf-poly1305",
+
+                "xchacha20-ietf-poly1305" =>
+                    "xchacha20-ietf-poly1305",
+
+                // Old/unsupported Shadowsocks cipher.
+                "chacha20-ietf" =>
+                    throw new InvalidOperationException(
+                        "Legacy Shadowsocks cipher 'chacha20-ietf' is not supported by this Xray version."),
+
+                _ =>
+                    throw new InvalidOperationException(
+                        $"Unsupported Shadowsocks cipher '{method}'.")
+            };
         }
     }
 }

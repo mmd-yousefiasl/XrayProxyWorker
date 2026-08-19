@@ -16,121 +16,101 @@ namespace XrayProxyWorker.Services.Implementations
         private const string TestUrl =
             "https://speed.cloudflare.com/__down?bytes=2097152";
 
-        public async Task<ProxyTestResult>
-            TestPortLatencyAsync(
-                int port,
-                CancellationToken ct)
+        public async Task<ProxyTestResult> TestPortLatencyAsync(
+            int port,
+            CancellationToken ct)
         {
+            using var timeoutCts =
+                CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+
             try
             {
-                using var handler =
-                    new SocketsHttpHandler
-                    {
-                        Proxy =
-                            new WebProxy(
-                                $"socks5://127.0.0.1:{port}"),
+                using var handler = new SocketsHttpHandler
+                {
+                    Proxy = new WebProxy(
+                        $"socks5://127.0.0.1:{port}"),
 
-                        UseProxy = true,
+                    UseProxy = true,
 
-                        ConnectTimeout =
-                            TimeSpan.FromSeconds(
-                                ConnectTimeoutSeconds),
+                    ConnectTimeout =
+                        TimeSpan.FromSeconds(7),
 
-                        PooledConnectionLifetime =
-                            TimeSpan.FromSeconds(30),
+                    PooledConnectionLifetime =
+                        TimeSpan.FromSeconds(30),
 
-                        AutomaticDecompression =
-                            System.Net.DecompressionMethods.None
-                    };
+                    AutomaticDecompression =
+                        System.Net.DecompressionMethods.None
+                };
 
-                using var client =
-                    new HttpClient(handler)
-                    {
-                        Timeout =
-                            TimeSpan.FromSeconds(
-                                RequestTimeoutSeconds)
-                    };
+                using var client = new HttpClient(handler)
+                {
+                    Timeout = Timeout.InfiniteTimeSpan
+                };
 
-                var stopwatch =
-                    Stopwatch.StartNew();
+                var stopwatch = Stopwatch.StartNew();
 
                 using var response =
                     await client.GetAsync(
-                        TestUrl,
+                        "https://speed.cloudflare.com/__down?bytes=2097152",
                         HttpCompletionOption.ResponseHeadersRead,
-                        ct);
+                        timeoutCts.Token);
 
-                long headersLatency =
+                long latency =
                     stopwatch.ElapsedMilliseconds;
 
                 if (!response.IsSuccessStatusCode)
-                {
                     return ProxyTestResult.Failed();
-                }
 
                 await using var stream =
-                    await response.Content
-                        .ReadAsStreamAsync(ct);
+                    await response.Content.ReadAsStreamAsync(
+                        timeoutCts.Token);
 
-                byte[] buffer =
-                    new byte[64 * 1024];
+                byte[] buffer = new byte[64 * 1024];
 
-                long downloadedBytes = 0;
+                const long targetBytes = 2 * 1024 * 1024;
 
-                while (downloadedBytes <
-                       TestDownloadBytes)
+                long downloaded = 0;
+
+                while (downloaded < targetBytes)
                 {
-                    int remaining =
-                        TestDownloadBytes -
-                        (int)downloadedBytes;
+                    int toRead = (int)Math.Min(
+                        buffer.Length,
+                        targetBytes - downloaded);
 
-                    int requested =
-                        Math.Min(
-                            buffer.Length,
-                            remaining);
-
-                    int read =
-                        await stream.ReadAsync(
-                            buffer.AsMemory(
-                                0,
-                                requested),
-                            ct);
+                    int read = await stream.ReadAsync(
+                        buffer.AsMemory(0, toRead),
+                        timeoutCts.Token);
 
                     if (read <= 0)
                         break;
 
-                    downloadedBytes += read;
+                    downloaded += read;
                 }
 
                 stopwatch.Stop();
 
-                if (downloadedBytes <= 0)
-                {
+                if (downloaded <= 0)
                     return ProxyTestResult.Failed();
-                }
 
                 double seconds =
                     stopwatch.Elapsed.TotalSeconds;
 
-                if (seconds <= 0)
-                {
-                    return ProxyTestResult.Failed();
-                }
-
-                double downloadMbps =
-                    downloadedBytes *
-                    8.0 /
+                double mbps =
+                    downloaded * 8.0 /
                     seconds /
                     1_000_000.0;
 
                 return new ProxyTestResult(
                     true,
-                    headersLatency,
-                    downloadMbps);
+                    latency,
+                    mbps);
             }
             catch (OperationCanceledException)
                 when (!ct.IsCancellationRequested)
             {
+                // Individual proxy timeout.
                 return ProxyTestResult.Failed();
             }
             catch

@@ -4,67 +4,263 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using XrayProxyWorker.Dtos.XrayProxyWorker.Dtos;
 
-namespace XrayProxyWorker.Tools
+namespace XrayProxyWorker.Extensions
 {
     public static class V2RayConfigExtensions
     {
-        public static V2RayConfig? ToV2RayConfig(this string uriString)
+        public static V2RayConfig? ToV2RayConfig(
+            this string uriString)
         {
-            if (string.IsNullOrWhiteSpace(uriString)) return null;
+            if (string.IsNullOrWhiteSpace(uriString))
+                return null;
+
+            uriString = uriString.Trim();
 
             try
             {
-                var config = new V2RayConfig { Url = uriString };
+                var parts = uriString.Split(
+                    "://",
+                    2,
+                    StringSplitOptions.None);
 
-                // 1. جدا کردن پروتکل
-                var parts = uriString.Split("://", 2);
-                if (parts.Length < 2) return null;
+                if (parts.Length != 2)
+                    return null;
 
-                config.Protocol = parts[0].ToLowerInvariant();
-                var remaining = parts[1];
+                string protocol =
+                    parts[0].Trim().ToLowerInvariant();
 
-                // --- مدیریت اختصاصی پروتکل VMESS ---
-                if (config.Protocol == "vmess")
+                return protocol switch
                 {
-                    return ParseVmess(remaining, config);
-                }
+                    "vmess" =>
+                        ParseVmess(parts[1], uriString),
 
-                // 2. جدا کردن فرگمنت (Name) قبل از هرگونه پردازش آدرس و پورت
-                var fragmentSplit = remaining.Split('#', 2);
-                config.Name = fragmentSplit.Length > 1
-                    ? System.Net.WebUtility.UrlDecode(fragmentSplit[1])
+                    "ss" =>
+                        ParseShadowsocks(uriString),
+
+                    "vless" =>
+                        ParseStandard(uriString),
+
+                    "trojan" =>
+                        ParseStandard(uriString),
+
+                    _ => null
+                };
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // =========================================================
+        // VLESS / Trojan
+        // =========================================================
+
+        private static V2RayConfig? ParseStandard(
+            string uriString)
+        {
+            var config = new V2RayConfig
+            {
+                Url = uriString
+            };
+
+            var parts = uriString.Split(
+                "://",
+                2);
+
+            config.Protocol =
+                parts[0].ToLowerInvariant();
+
+            string remaining = parts[1];
+
+            // Fragment
+            var fragmentSplit =
+                remaining.Split('#', 2);
+
+            string body =
+                fragmentSplit[0];
+
+            config.Name =
+                fragmentSplit.Length > 1
+                    ? Uri.UnescapeDataString(
+                        fragmentSplit[1])
                     : "Unnamed";
 
-                var body = fragmentSplit[0];
+            // Query
+            var querySplit =
+                body.Split('?', 2);
 
-                // 3. جدا کردن پارامترهای کوئری
-                var querySplit = body.Split('?', 2);
-                if (querySplit.Length > 1)
+            string authority =
+                querySplit[0];
+
+            if (querySplit.Length > 1)
+            {
+                var queryParams =
+                    QueryHelpers.ParseQuery(
+                        querySplit[1]);
+
+                foreach (var param in queryParams)
                 {
-                    var queryParams = QueryHelpers.ParseQuery(querySplit[1]);
-                    foreach (var param in queryParams)
-                        config.Parameters[param.Key] = param.Value.ToString();
+                    config.Parameters[param.Key] =
+                        param.Value.ToString();
+                }
+            }
+
+            // user@host:port
+            var atIndex =
+                authority.LastIndexOf('@');
+
+            if (atIndex <= 0)
+                return null;
+
+            config.UserId =
+                Uri.UnescapeDataString(
+                    authority[..atIndex]);
+
+            string hostPort =
+                authority[(atIndex + 1)..];
+
+            if (!TryParseHostPort(
+                    hostPort,
+                    out string address,
+                    out int port))
+            {
+                return null;
+            }
+
+            config.Address = address;
+            config.Port = port;
+
+            return config;
+        }
+
+        // =========================================================
+        // VMess
+        // =========================================================
+
+        private static V2RayConfig? ParseVmess(
+            string base64Part,
+            string originalUri)
+        {
+            try
+            {
+                string normalized =
+                    base64Part
+                        .Trim()
+                        .Replace(" ", "+")
+                        .Replace("-", "+")
+                        .Replace("_", "/");
+
+                while (normalized.Length % 4 != 0)
+                {
+                    normalized += "=";
                 }
 
-                // 4. استخراج لایه کاربری و هاست/پورت
-                var userAndHost = querySplit[0].Split('@', 2);
-                if (userAndHost.Length < 2) return null; // فاقد کاراکتر @
+                byte[] jsonBytes =
+                    Convert.FromBase64String(normalized);
 
-                config.UserId = userAndHost[0];
+                string json =
+                    Encoding.UTF8.GetString(jsonBytes);
 
-                // جدا کردن پورت از آی‌پدریس/دامنه
-                var lastColonIndex = userAndHost[1].LastIndexOf(':');
-                if (lastColonIndex >= 0)
+                using var doc =
+                    JsonDocument.Parse(json);
+
+                var root = doc.RootElement;
+
+                var config = new V2RayConfig
                 {
-                    config.Address = userAndHost[1].Substring(0, lastColonIndex);
-                    var portStr = userAndHost[1].Substring(lastColonIndex + 1);
-                    config.Port = int.TryParse(portStr, out int p) ? p : 443;
-                }
-                else
+                    Url = originalUri,
+                    Protocol = "vmess"
+                };
+
+                config.Address =
+                    root.TryGetProperty(
+                        "add",
+                        out var add)
+                        ? add.GetString() ?? ""
+                        : "";
+
+                if (root.TryGetProperty(
+                        "port",
+                        out var port))
                 {
-                    config.Address = userAndHost[1];
-                    config.Port = 443; // پورت پیش‌فرض
+                    config.Port =
+                        port.ValueKind ==
+                        JsonValueKind.Number
+                            ? port.GetInt32()
+                            : int.TryParse(
+                                port.GetString(),
+                                out int p)
+                                ? p
+                                : 443;
                 }
+
+                config.UserId =
+                    root.TryGetProperty(
+                        "id",
+                        out var id)
+                        ? id.GetString() ?? ""
+                        : "";
+
+                config.Name =
+                    root.TryGetProperty(
+                        "ps",
+                        out var ps)
+                        ? ps.GetString() ?? "VMess"
+                        : "VMess";
+
+                CopyJsonString(
+                    root,
+                    config,
+                    "net",
+                    "type");
+
+                CopyJsonString(
+                    root,
+                    config,
+                    "tls",
+                    "security");
+
+                CopyJsonString(
+                    root,
+                    config,
+                    "sni");
+
+                CopyJsonString(
+                    root,
+                    config,
+                    "host");
+
+                CopyJsonString(
+                    root,
+                    config,
+                    "path");
+
+                CopyJsonString(
+                    root,
+                    config,
+                    "serviceName");
+
+                CopyJsonString(
+                    root,
+                    config,
+                    "alpn");
+
+                CopyJsonString(
+                    root,
+                    config,
+                    "type");
+
+                CopyJsonString(
+                    root,
+                    config,
+                    "scy",
+                    "encryption");
+
+                CopyJsonString(
+                    root,
+                    config,
+                    "aid");
 
                 return config;
             }
@@ -74,47 +270,274 @@ namespace XrayProxyWorker.Tools
             }
         }
 
-        private static V2RayConfig? ParseVmess(string base64Part, V2RayConfig config)
+        // =========================================================
+        // Shadowsocks
+        // =========================================================
+
+        private static V2RayConfig? ParseShadowsocks(
+            string uriString)
         {
             try
             {
-                // پاکسازی ساختار بیس۶۴ برای جلوگیری از خطاهای پدینگ
-                string normalizedBase64 = base64Part.Trim().Replace(" ", "+");
-                int mod4 = normalizedBase64.Length % 4;
-                if (mod4 > 0) normalizedBase64 += new string('=', 4 - mod4);
+                var config = new V2RayConfig
+                {
+                    Url = uriString,
+                    Protocol = "ss",
+                    Name = "Shadowsocks"
+                };
 
-                var jsonBytes = Convert.FromBase64String(normalizedBase64);
-                var jsonString = Encoding.UTF8.GetString(jsonBytes);
+                string remaining =
+                    uriString["ss://".Length..];
 
-                // پارس کردن جی‌سون استاندارد نرم‌افزارهای v2ray
-                using var doc = JsonDocument.Parse(jsonString);
-                var root = doc.RootElement;
+                // Fragment
+                var fragmentSplit =
+                    remaining.Split('#', 2);
 
-                config.Address = root.GetProperty("add").GetString() ?? "";
-                config.Port = root.GetProperty("port").ValueKind == JsonValueKind.Number
-                    ? root.GetProperty("port").GetInt32()
-                    : int.Parse(root.GetProperty("port").GetString() ?? "443");
+                string body =
+                    fragmentSplit[0];
 
-                config.UserId = root.GetProperty("id").GetString() ?? "";
-                config.Name = root.TryGetProperty("ps", out var psElement) ? psElement.GetString() ?? "VMess" : "VMess";
+                if (fragmentSplit.Length > 1)
+                {
+                    config.Name =
+                        Uri.UnescapeDataString(
+                            fragmentSplit[1]);
+                }
 
-                // پر کردن پارامترها برای سازگاری با بقیه ساختار سیستم شما
-                if (root.TryGetProperty("net", out var net)) config.Parameters["type"] = net.GetString() ?? "";
-                if (root.TryGetProperty("tls", out var tls)) config.Parameters["security"] = tls.GetString() ?? "";
-                if (root.TryGetProperty("sni", out var sni)) config.Parameters["sni"] = sni.GetString() ?? "";
-                if (root.TryGetProperty("path", out var path)) config.Parameters["path"] = path.GetString() ?? "";
+                // -----------------------------------------------------
+                // SIP002:
+                //
+                // ss://BASE64(method:password)@host:port
+                // -----------------------------------------------------
+
+                var atIndex =
+                    body.LastIndexOf('@');
+
+                if (atIndex > 0)
+                {
+                    string userInfo =
+                        body[..atIndex];
+
+                    string hostPort =
+                        body[(atIndex + 1)..];
+
+                    if (!TryParseHostPort(
+                            hostPort,
+                            out string address,
+                            out int port))
+                    {
+                        return null;
+                    }
+
+                    config.Address = address;
+                    config.Port = port;
+
+                    string decoded =
+                        DecodeBase64Flexible(
+                            userInfo);
+
+                    var credentials =
+                        decoded.Split(
+                            ':',
+                            2);
+
+                    if (credentials.Length != 2)
+                    {
+                        return null;
+                    }
+
+                    config.Parameters["method"] =
+                        credentials[0];
+
+                    config.UserId =
+                        credentials[1];
+
+                    return config;
+                }
+
+                // -----------------------------------------------------
+                // Legacy:
+                //
+                // ss://BASE64(method:password@host:port)
+                // -----------------------------------------------------
+
+                string decodedLegacy =
+                    DecodeBase64Flexible(body);
+
+                if (string.IsNullOrWhiteSpace(
+                        decodedLegacy))
+                {
+                    return null;
+                }
+
+                var methodPasswordHost =
+                    decodedLegacy.Split(
+                        '@',
+                        2);
+
+                if (methodPasswordHost.Length != 2)
+                {
+                    return null;
+                }
+
+                var methodPassword =
+                    methodPasswordHost[0]
+                        .Split(':', 2);
+
+                if (methodPassword.Length != 2)
+                {
+                    return null;
+                }
+
+                config.Parameters["method"] =
+                    methodPassword[0];
+
+                config.UserId =
+                    methodPassword[1];
+
+                if (!TryParseHostPort(
+                        methodPasswordHost[1],
+                        out string legacyAddress,
+                        out int legacyPort))
+                {
+                    return null;
+                }
+
+                config.Address =
+                    legacyAddress;
+
+                config.Port =
+                    legacyPort;
 
                 return config;
             }
             catch
             {
-                return null; // در صورت خرابی دیتای بیس۶۴
+                return null;
             }
         }
 
-        private static readonly Regex GitHubFileRegex = new(
-            @"^https?://github\.com/(?<owner>[^/]+)/(?<repo>[^/]+)/blob/(?<branch>[^/]+)/(?<path>.+)$",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        // =========================================================
+        // Helpers
+        // =========================================================
+
+        private static bool TryParseHostPort(
+            string hostPort,
+            out string address,
+            out int port)
+        {
+            address = string.Empty;
+            port = 0;
+
+            hostPort =
+                hostPort.Trim();
+
+            // IPv6: [::1]:443
+            if (hostPort.StartsWith("["))
+            {
+                int closeBracket =
+                    hostPort.IndexOf(']');
+
+                if (closeBracket < 0)
+                    return false;
+
+                address =
+                    hostPort[1..closeBracket];
+
+                if (hostPort.Length <=
+                    closeBracket + 2)
+                {
+                    port = 443;
+                    return true;
+                }
+
+                if (hostPort[closeBracket + 1] != ':')
+                    return false;
+
+                return int.TryParse(
+                    hostPort[(closeBracket + 2)..],
+                    out port);
+            }
+
+            int lastColon =
+                hostPort.LastIndexOf(':');
+
+            if (lastColon <= 0)
+            {
+                address = hostPort;
+                port = 443;
+                return true;
+            }
+
+            address =
+                hostPort[..lastColon];
+
+            return int.TryParse(
+                hostPort[(lastColon + 1)..],
+                out port);
+        }
+
+        private static string DecodeBase64Flexible(
+            string value)
+        {
+            value =
+                Uri.UnescapeDataString(
+                    value.Trim());
+
+            value =
+                value
+                    .Replace("-", "+")
+                    .Replace("_", "/");
+
+            while (value.Length % 4 != 0)
+            {
+                value += "=";
+            }
+
+            byte[] bytes =
+                Convert.FromBase64String(value);
+
+            return Encoding.UTF8.GetString(bytes);
+        }
+
+        private static void CopyJsonString(
+            JsonElement root,
+            V2RayConfig config,
+            string propertyName,
+            string? parameterName = null)
+        {
+            if (!root.TryGetProperty(
+                    propertyName,
+                    out var element))
+            {
+                return;
+            }
+
+            if (element.ValueKind !=
+                JsonValueKind.String)
+            {
+                return;
+            }
+
+            string value =
+                element.GetString() ?? "";
+
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                config.Parameters[
+                    parameterName ?? propertyName] =
+                    value;
+            }
+        }
+
+        // =========================================================
+        // GitHub raw URL
+        // =========================================================
+
+        private static readonly Regex GitHubFileRegex =
+            new(
+                @"^https?://github\.com/(?<owner>[^/]+)/(?<repo>[^/]+)/blob/(?<branch>[^/]+)/(?<path>.+)$",
+                RegexOptions.Compiled |
+                RegexOptions.IgnoreCase);
 
         public static bool TryGetRawContentUrl(
             this string? url,
@@ -127,8 +550,10 @@ namespace XrayProxyWorker.Tools
 
             url = url.Trim();
 
-            // Already a raw GitHub URL
-            if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+            if (Uri.TryCreate(
+                    url,
+                    UriKind.Absolute,
+                    out var uri) &&
                 uri.Scheme is "http" or "https" &&
                 uri.Host.Equals(
                     "raw.githubusercontent.com",
@@ -138,19 +563,18 @@ namespace XrayProxyWorker.Tools
                 return true;
             }
 
-            // Normal GitHub file URL
-            var match = GitHubFileRegex.Match(url);
+            var match =
+                GitHubFileRegex.Match(url);
 
             if (!match.Success)
                 return false;
 
-            var owner = match.Groups["owner"].Value;
-            var repo = match.Groups["repo"].Value;
-            var branch = match.Groups["branch"].Value;
-            var path = match.Groups["path"].Value;
-
             rawUrl =
-                $"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}";
+                $"https://raw.githubusercontent.com/" +
+                $"{match.Groups["owner"].Value}/" +
+                $"{match.Groups["repo"].Value}/" +
+                $"{match.Groups["branch"].Value}/" +
+                $"{match.Groups["path"].Value}";
 
             return true;
         }

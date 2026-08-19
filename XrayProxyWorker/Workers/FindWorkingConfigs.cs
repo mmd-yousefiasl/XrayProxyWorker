@@ -1,6 +1,6 @@
 ﻿using XrayProxyWorker.Dtos.XrayProxyWorker.Dtos;
+using XrayProxyWorker.Extensions;
 using XrayProxyWorker.Services.Interfaces;
-using XrayProxyWorker.Tools;
 
 namespace XrayProxyWorker.Workers
 {

@@ -39,44 +39,120 @@ namespace XrayProxyWorker.Services.Implementations
 
         public Process StartXrayEngine(string configPath)
         {
-            string xrayExeName = OperatingSystem.IsWindows() ? "xray.exe" : "xray";
-            string xrayDirectory = Path.Combine(AppContext.BaseDirectory, "Core");
-            string xrayPath = Path.Combine(xrayDirectory, xrayExeName);
+            string xrayExeName =
+                OperatingSystem.IsWindows()
+                    ? "xray.exe"
+                    : "xray";
+
+            string xrayDirectory =
+                Path.Combine(
+                    AppContext.BaseDirectory,
+                    "Core");
+
+            string xrayPath =
+                Path.Combine(
+                    xrayDirectory,
+                    xrayExeName);
 
             if (!File.Exists(xrayPath))
-                throw new FileNotFoundException($"CRITICAL: Xray executable not found at: {xrayPath}");
+            {
+                throw new FileNotFoundException(
+                    $"CRITICAL: Xray executable not found at: {xrayPath}");
+            }
 
             var process = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
                     FileName = xrayPath,
-                    Arguments = $"run -c \"{configPath}\"",
+
+                    Arguments =
+                        $"run -c \"{configPath}\"",
+
                     UseShellExecute = false,
                     CreateNoWindow = true,
+
                     RedirectStandardError = true,
                     RedirectStandardOutput = true,
+
                     WorkingDirectory = xrayDirectory
                 }
             };
 
-            process.OutputDataReceived += (s, e) =>
-            {
-                // Ignore normal Xray stdout.
-            };
-
-            process.ErrorDataReceived += (s, e) =>
-            {
-                // Ignore individual proxy connection errors.
-            };
+            // Keep the normal Xray output quiet.
+            process.OutputDataReceived += (_, _) => { };
+            process.ErrorDataReceived += (_, _) => { };
 
             return process;
         }
 
-        private void HandleLog(string? data, bool isError)
+        public async Task<bool> ValidateConfigAsync(
+            string configPath,
+            CancellationToken ct)
         {
-            if (string.IsNullOrEmpty(data) || data.Contains("[Warning]") || data.Contains("deprecated")) return;
-            _logger.LogInformation(isError ? "[XRAY-ERR] {Data}" : "[XRAY-OUT] {Data}", data);
+            string xrayExeName =
+                OperatingSystem.IsWindows()
+                    ? "xray.exe"
+                    : "xray";
+
+            string xrayDirectory =
+                Path.Combine(
+                    AppContext.BaseDirectory,
+                    "Core");
+
+            string xrayPath =
+                Path.Combine(
+                    xrayDirectory,
+                    xrayExeName);
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = xrayPath,
+
+                Arguments =
+                    $"run -test -c \"{configPath}\"",
+
+                UseShellExecute = false,
+                CreateNoWindow = true,
+
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+
+                WorkingDirectory = xrayDirectory
+            };
+
+            using var process = new Process
+            {
+                StartInfo = psi
+            };
+
+            process.Start();
+
+            Task<string> stdoutTask =
+                process.StandardOutput.ReadToEndAsync(ct);
+
+            Task<string> stderrTask =
+                process.StandardError.ReadToEndAsync(ct);
+
+            await process.WaitForExitAsync(ct);
+
+            string stdout = await stdoutTask;
+            string stderr = await stderrTask;
+
+            if (process.ExitCode == 0)
+            {
+                _logger.LogInformation(
+                    "Xray configuration validation passed.");
+
+                return true;
+            }
+
+            _logger.LogError(
+                "Xray configuration validation FAILED.\n{StdOut}\n{StdErr}",
+                stdout,
+                stderr);
+
+            return false;
         }
     }
 }
