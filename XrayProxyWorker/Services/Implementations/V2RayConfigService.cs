@@ -1,4 +1,6 @@
-﻿using XrayProxyWorker.Dtos.XrayProxyWorker.Dtos;
+﻿using Microsoft.Extensions.Options;
+using XrayProxyWorker.Dtos;
+using XrayProxyWorker.Dtos.XrayProxyWorker.Dtos;
 using XrayProxyWorker.Extensions;
 using XrayProxyWorker.Services.Interfaces;
 
@@ -8,17 +10,21 @@ namespace XrayProxyWorker.Services.Implementations
     {
         private readonly HttpClient _httpClient;
         private readonly ILogger<IV2RayConfigService> _logger;
+        private readonly BenchmarkOptions _options;
 
         public V2RayConfigService(HttpClient httpClient,
-            ILogger<IV2RayConfigService> logger)
+            ILogger<IV2RayConfigService> logger,
+            IOptions<BenchmarkOptions> options)
         {
             _httpClient = httpClient;
             _logger = logger;
+            _options = options.Value;
         }
 
         public async Task<List<V2RayConfig>> GetConfigsAsync(string configsUrl)
         {
-            const int MaxConfigs = 500;
+            int MaxConfigs =
+                _options.MaxConfigs;
 
             var protocols = new[]
             {

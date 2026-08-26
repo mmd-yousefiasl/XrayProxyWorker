@@ -86,6 +86,73 @@ namespace XrayProxyWorker.Services.Implementations
             return process;
         }
 
+        public async Task<bool> WaitUntilReadyAsync(
+            Process process,
+            int probePort,
+            TimeSpan timeout,
+            CancellationToken ct)
+        {
+            using var timeoutCts =
+                CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+            timeoutCts.CancelAfter(timeout);
+
+            while (true)
+            {
+                if (process.HasExited)
+                {
+                    _logger.LogError(
+                        "Xray exited during startup (exit code {ExitCode}).",
+                        process.ExitCode);
+
+                    return false;
+                }
+
+                try
+                {
+                    // A successful TCP connect to the first SOCKS inbound
+                    // proves the engine is up and accepting traffic.
+
+                    using var tcp =
+                        new System.Net.Sockets.TcpClient();
+
+                    await tcp.ConnectAsync(
+                        "127.0.0.1",
+                        probePort,
+                        timeoutCts.Token);
+
+                    return true;
+                }
+                catch (OperationCanceledException)
+                    when (!ct.IsCancellationRequested)
+                {
+                    _logger.LogError(
+                        "Xray did not become ready within {Timeout} seconds.",
+                        timeout.TotalSeconds);
+
+                    return false;
+                }
+                catch
+                {
+                    // Port not accepting yet - retry after a short delay.
+
+                    try
+                    {
+                        await Task.Delay(250, timeoutCts.Token);
+                    }
+                    catch (OperationCanceledException)
+                        when (!ct.IsCancellationRequested)
+                    {
+                        _logger.LogError(
+                            "Xray did not become ready within {Timeout} seconds.",
+                            timeout.TotalSeconds);
+
+                        return false;
+                    }
+                }
+            }
+        }
+
         public async Task<bool> ValidateConfigAsync(
             string configPath,
             CancellationToken ct)

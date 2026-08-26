@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
+using Microsoft.Extensions.Options;
 using XrayProxyWorker.Dtos;
 using XrayProxyWorker.Dtos.XrayProxyWorker.Dtos;
 using XrayProxyWorker.Services.Interfaces;
@@ -11,21 +12,22 @@ namespace XrayProxyWorker.Services.Implementations
         private readonly IXrayConfigGenerator _configGenerator;
         private readonly IProcessManager _processManager;
         private readonly ILatencyTester _tester;
+        private readonly BenchmarkOptions _options;
 
-        private const int PortPoolStart = 20000;
-        private const int MaxConcurrentTests = 30;
-        private const int XrayStartupDelayMs = 4000;
+        private const int BarWidth = 40;
 
         public XrayBenchmarkService(
             ILogger<XrayBenchmarkService> logger,
             IXrayConfigGenerator configGenerator,
             IProcessManager processManager,
-            ILatencyTester tester)
+            ILatencyTester tester,
+            IOptions<BenchmarkOptions> options)
         {
             _logger = logger;
             _configGenerator = configGenerator;
             _processManager = processManager;
             _tester = tester;
+            _options = options.Value;
         }
 
         public async Task<List<ProxyBenchmarkResult>> FindAllFastProxiesAsync(
@@ -59,7 +61,7 @@ namespace XrayProxyWorker.Services.Implementations
                 var generated = _configGenerator.GenerateMasterConfig(
                     uniqueConfigs,
                     configPath,
-                    PortPoolStart);
+                    _options.PortPoolStart);
 
                 if (generated.Count == 0)
                 {
@@ -70,7 +72,7 @@ namespace XrayProxyWorker.Services.Implementations
                 }
 
                 _logger.LogInformation(
-    "Validating generated Xray configuration...");
+                    "Validating generated Xray configuration...");
 
                 bool configValid =
                     await _processManager.ValidateConfigAsync(
@@ -99,151 +101,104 @@ namespace XrayProxyWorker.Services.Implementations
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
 
-                await Task.Delay(XrayStartupDelayMs, ct);
+                // -----------------------------------------------------
+                // Wait until the engine actually accepts connections on
+                // the first SOCKS inbound instead of a fixed sleep.
+                // -----------------------------------------------------
 
-                if (process.HasExited)
+                bool ready =
+                    await _processManager.WaitUntilReadyAsync(
+                        process,
+                        generated[0].Port,
+                        TimeSpan.FromSeconds(
+                            _options.XrayStartupTimeoutSeconds),
+                        ct);
+
+                if (!ready)
                 {
                     _logger.LogError(
-                        "Xray exited before benchmark began.");
+                        "Xray was not ready in time. Benchmark aborted.");
+
+                    return new();
+                }
+
+                // -----------------------------------------------------
+                // Phase 1: cheap reachability sweep at high concurrency.
+                // -----------------------------------------------------
+
+                Console.WriteLine();
+                Console.WriteLine(
+                    $"Phase 1/2: reachability check for {generated.Count} proxies...");
+                Console.WriteLine();
+
+                var reachable = await RunPhaseAsync<ReachableProxy>(
+                    generated,
+                    _options.ReachabilityConcurrency,
+                    "Reachability",
+                    async proxy =>
+                    {
+                        var test =
+                            await _tester.TestReachabilityAsync(
+                                proxy.Port,
+                                ct);
+
+                        return test.Success
+                            ? new ReachableProxy(
+                                proxy,
+                                test.LatencyMs)
+                            : null;
+                    },
+                    ct);
+
+                if (reachable.Count == 0)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("No reachable proxies found.");
 
                     return new();
                 }
 
                 Console.WriteLine();
-                Console.WriteLine($"Testing {generated.Count} proxies...");
+                Console.WriteLine(
+                    $"Reachable proxies: {reachable.Count}/{generated.Count}");
                 Console.WriteLine();
 
-                using var semaphore =
-                    new SemaphoreSlim(MaxConcurrentTests);
+                // -----------------------------------------------------
+                // Phase 2: speed test only survivors, low concurrency so
+                // downloads don't share bandwidth and skew results.
+                // Survivors are tested best-latency first.
+                // -----------------------------------------------------
 
-                const int barWidth = 40;
+                var orderedSurvivors = reachable
+                    .OrderBy(x => x.LatencyMs)
+                    .Select(x => x.Proxy)
+                    .ToList();
 
-                int completed = 0;
-                int workingCount = 0;
-                int failedCount = 0;
+                Console.WriteLine(
+                    $"Phase 2/2: speed test for {orderedSurvivors.Count} reachable proxies...");
+                Console.WriteLine();
 
-                var benchmarkStopwatch =
-                    Stopwatch.StartNew();
-
-                var tasks = generated.Select(async generatedProxy =>
-                {
-                    await semaphore.WaitAsync(ct);
-
-                    try
+                var speedResults = await RunPhaseAsync<ProxyBenchmarkResult>(
+                    orderedSurvivors,
+                    _options.SpeedTestConcurrency,
+                    "Speed test",
+                    async proxy =>
                     {
                         var test =
-                            await _tester.TestPortLatencyAsync(
-                                generatedProxy.Port,
-                                ct);
-
-                        Interlocked.Increment(ref completed);
+                            await _tester.TestSpeedAsync(proxy.Port, ct);
 
                         if (!test.Success)
-                        {
-                            Interlocked.Increment(ref failedCount);
                             return null;
-                        }
-
-                        Interlocked.Increment(ref workingCount);
 
                         return new ProxyBenchmarkResult(
-                            generatedProxy.Config,
+                            proxy.Config,
                             test.LatencyMs,
                             test.DownloadMbps);
-                    }
-                    finally
-                    {
-                        semaphore.Release();
-                    }
-                }).ToList();
+                    },
+                    ct);
 
-
-                // ---------------------------------------------------------
-                // Live progress display
-                // Updates every 250ms even when no proxy finishes.
-                // ---------------------------------------------------------
-
-                var progressTask = Task.Run(async () =>
-                {
-                    try
-                    {
-                        while (!ct.IsCancellationRequested)
-                        {
-                            int current =
-                                Volatile.Read(ref completed);
-
-                            if (current >= generated.Count)
-                                break;
-
-                            int currentWorking =
-                                Volatile.Read(ref workingCount);
-
-                            int currentFailed =
-                                Volatile.Read(ref failedCount);
-
-                            double progress =
-                                generated.Count == 0
-                                    ? 0
-                                    : (double)current / generated.Count;
-
-                            int filled =
-                                (int)(progress * barWidth);
-
-                            string bar =
-                                new string('#', filled) +
-                                new string('.', barWidth - filled);
-
-                            Console.Write(
-                                $"\r[{bar}] " +
-                                $"{current}/{generated.Count} " +
-                                $"| Working: {currentWorking} " +
-                                $"| Failed: {currentFailed} " +
-                                $"| {benchmarkStopwatch.Elapsed:mm\\:ss}");
-
-                            await Task.Delay(250, ct);
-                        }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                    }
-                }, ct);
-
-
-                // ---------------------------------------------------------
-                // Wait for all proxy tests.
-                // ---------------------------------------------------------
-
-                var results =
-                    await Task.WhenAll(tasks);
-
-                benchmarkStopwatch.Stop();
-
-                try
-                {
-                    await progressTask;
-                }
-                catch (OperationCanceledException)
-                {
-                }
-
-
-                // ---------------------------------------------------------
-                // Final progress line
-                // ---------------------------------------------------------
-
-                Console.Write(
-                    $"\r[{new string('#', barWidth)}] " +
-                    $"{generated.Count}/{generated.Count} " +
-                    $"| Working: {workingCount} " +
-                    $"| Failed: {failedCount} " +
-                    $"| {benchmarkStopwatch.Elapsed:mm\\:ss}");
-
-                Console.WriteLine();
-                Console.WriteLine();
-
-                var working = results
-                    .Where(x => x != null)
-                    .Select(x => x!)
+                var working = speedResults
+                    .OfType<ProxyBenchmarkResult>()
                     .OrderByDescending(x => x.DownloadMbps)
                     .ThenBy(x => x.LatencyMs)
                     .ToList();
@@ -292,6 +247,152 @@ namespace XrayProxyWorker.Services.Implementations
                 {
                 }
             }
+        }
+
+        /// <summary>
+        /// Runs an async worker over every item under a concurrency cap,
+        /// with a live progress bar. Returns non-null results only.
+        /// </summary>
+        private sealed record ReachableProxy(
+            GeneratedProxy Proxy,
+            long LatencyMs);
+
+        private static async Task<List<T>> RunPhaseAsync<T>(
+            List<GeneratedProxy> items,
+            int maxConcurrency,
+            string label,
+            Func<GeneratedProxy, Task<T?>> worker,
+            CancellationToken ct)
+            where T : class
+        {
+            int completed = 0;
+            int okCount = 0;
+            int failedCount = 0;
+
+            var stopwatch =
+                Stopwatch.StartNew();
+
+            using var semaphore =
+                new SemaphoreSlim(maxConcurrency);
+
+            var tasks = items.Select(async item =>
+            {
+                await semaphore.WaitAsync(ct);
+
+                try
+                {
+                    T? result = await worker(item);
+
+                    Interlocked.Increment(ref completed);
+
+                    if (result is null)
+                        Interlocked.Increment(ref failedCount);
+                    else
+                        Interlocked.Increment(ref okCount);
+
+                    return result;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch
+                {
+                    Interlocked.Increment(ref completed);
+                    Interlocked.Increment(ref failedCount);
+
+                    return null;
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            }).ToList();
+
+            var progressTask = Task.Run(async () =>
+            {
+                try
+                {
+                    while (!ct.IsCancellationRequested)
+                    {
+                        int current =
+                            Volatile.Read(ref completed);
+
+                        if (current >= items.Count)
+                            break;
+
+                        DrawProgress(
+                            label,
+                            current,
+                            items.Count,
+                            Volatile.Read(ref okCount),
+                            Volatile.Read(ref failedCount),
+                            stopwatch);
+
+                        await Task.Delay(250, ct);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }, ct);
+
+            var results =
+                await Task.WhenAll(tasks);
+
+            stopwatch.Stop();
+
+            try
+            {
+                await progressTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            // Final progress line.
+
+            DrawProgress(
+                label,
+                items.Count,
+                items.Count,
+                okCount,
+                failedCount,
+                stopwatch);
+
+            Console.WriteLine();
+            Console.WriteLine();
+
+            return results
+                .Where(x => x is not null)
+                .Select(x => x!)
+                .ToList();
+        }
+
+        private static void DrawProgress(
+            string label,
+            int done,
+            int total,
+            int okCount,
+            int failedCount,
+            Stopwatch stopwatch)
+        {
+            double progress =
+                total == 0 ? 0 : (double)done / total;
+
+            int filled =
+                (int)(progress * BarWidth);
+
+            string bar =
+                new string('#', filled) +
+                new string('.', BarWidth - filled);
+
+            Console.Write(
+                $"\r[{bar}] [{label}] " +
+                $"{done}/{total} " +
+                $"| Ok: {okCount} " +
+                $"| Failed: {failedCount} " +
+                $"| {stopwatch.Elapsed:mm\\:ss}   ");
         }
     }
 }

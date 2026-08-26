@@ -8,11 +8,14 @@ namespace XrayProxyWorker.Services.Implementations
 {
     public class XrayConfigGenerator : IXrayConfigGenerator
     {
+        private readonly ILogger<XrayConfigGenerator> _logger;
         private readonly IProxyConfigValidator _validator;
 
         public XrayConfigGenerator(
+            ILogger<XrayConfigGenerator> logger,
             IProxyConfigValidator validator)
         {
+            _logger = logger;
             _validator = validator;
         }
 
@@ -107,6 +110,10 @@ namespace XrayProxyWorker.Services.Implementations
                 }
                 catch (Exception ex)
                 {
+                    _logger.LogWarning(
+                        ex,
+                        "Failed to generate outbound for config: {Url}",
+                        proxy.Url);
                 }
             }
 
@@ -116,6 +123,21 @@ namespace XrayProxyWorker.Services.Implementations
                     protocol = "freedom",
                     tag = "direct"
                 });
+
+            // Internal DNS queries must go out directly - otherwise they
+            // would fall through to the first proxy outbound.
+
+            var dnsRule = new
+            {
+                type = "field",
+                inboundTag = new[]
+                {
+                    "dns"
+                },
+                outboundTag = "direct"
+            };
+
+            rules.Insert(0, dnsRule);
 
             var masterLayout = new
             {
@@ -134,6 +156,16 @@ namespace XrayProxyWorker.Services.Implementations
                 log = new
                 {
                     loglevel = "warning"
+                },
+
+                dns = new
+                {
+                    servers = new[]
+                    {
+                        "1.1.1.1",
+                        "8.8.8.8"
+                    },
+                    queryStrategy = "UseIPv4"
                 },
 
                 inbounds = inbounds.ToArray(),

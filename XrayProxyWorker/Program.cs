@@ -1,8 +1,12 @@
+using XrayProxyWorker.Dtos;
 using XrayProxyWorker.Services.Implementations;
 using XrayProxyWorker.Services.Interfaces;
 using XrayProxyWorker.Workers;
 
 var builder = Host.CreateApplicationBuilder(args);
+
+builder.Services.Configure<BenchmarkOptions>(
+    builder.Configuration.GetSection("Benchmark"));
 
 builder.Services.AddHttpClient<IV2RayConfigService, V2RayConfigService>();
 
