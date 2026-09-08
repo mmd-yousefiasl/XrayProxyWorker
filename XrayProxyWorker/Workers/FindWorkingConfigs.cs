@@ -1,4 +1,6 @@
-﻿using XrayProxyWorker.Dtos.XrayProxyWorker.Dtos;
+﻿using Microsoft.Extensions.Options;
+using XrayProxyWorker.Dtos;
+using XrayProxyWorker.Dtos.XrayProxyWorker.Dtos;
 using XrayProxyWorker.Extensions;
 using XrayProxyWorker.Services.Interfaces;
 
@@ -8,83 +10,87 @@ namespace XrayProxyWorker.Workers
     {
         private readonly IV2RayConfigService _configService;
         private readonly IXrayBenchmarkService _benchmarkService;
+        private readonly BenchmarkOptions _options;
         private readonly ILogger<ConsoleRunner> _logger;
 
         public ConsoleRunner(
             IV2RayConfigService configService,
             IXrayBenchmarkService benchmarkService,
+            IOptions<BenchmarkOptions> options,
             ILogger<ConsoleRunner> logger)
         {
             _configService = configService;
             _benchmarkService = benchmarkService;
+            _options = options.Value;
             _logger = logger;
         }
 
         public async Task RunAsync(CancellationToken ct)
         {
+            var sources = _options.Sources
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .ToList();
+
             Console.WriteLine("========================================");
             Console.WriteLine("       XRAY PROXY CONFIG TESTER");
             Console.WriteLine("========================================");
+            Console.WriteLine(
+                $"{sources.Count} sources configured.");
             Console.WriteLine();
 
-            while (!ct.IsCancellationRequested)
+            // Stdin closed (piped EOF, launched without a console) -
+            // ReadKey throws instead of blocking, so run once and exit
+            // instead of spinning on prompts.
+
+            bool interactive = true;
+
+            while (true)
             {
-                Console.Write("Enter GitHub config URL (or 'exit'): ");
-
-                string? input = Console.ReadLine()?.Trim();
-
-                if (string.IsNullOrWhiteSpace(input))
-                    continue;
-
-                if (input.Equals("exit", StringComparison.OrdinalIgnoreCase))
-                    break;
-
-                if (!input.TryGetRawContentUrl(out string rawUrl))
+                if (interactive)
                 {
-                    Console.WriteLine();
-                    Console.WriteLine("Invalid GitHub URL.");
-                    Console.WriteLine(
-                        "Please enter a GitHub file URL such as:");
-                    Console.WriteLine(
-                        "https://github.com/user/repository/blob/main/Sub1.txt");
-                    Console.WriteLine();
-                    continue;
+                    Console.Write(
+                        "Press any key to start testing (Esc to quit)... ");
+
+                    try
+                    {
+                        if (Console.ReadKey(intercept: true).Key ==
+                            ConsoleKey.Escape)
+                        {
+                            break;
+                        }
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        interactive = false;
+                    }
                 }
 
                 try
                 {
                     Console.WriteLine();
-                    Console.WriteLine($"Raw URL:");
-                    Console.WriteLine(rawUrl);
-                    Console.WriteLine();
-
                     Console.WriteLine("Downloading configs...");
 
                     List<V2RayConfig> configs =
-                        await _configService.GetConfigsAsync(rawUrl);
+                        await LoadConfigsFromSourcesAsync(sources, ct);
 
-                    if (configs == null || configs.Count == 0)
+                    if (configs.Count == 0)
                     {
                         Console.WriteLine("No configs were found.");
                         Console.WriteLine();
+
+                        if (!interactive)
+                            break;
+
                         continue;
                     }
 
                     Console.WriteLine(
-                        $"Downloaded {configs.Count} configs.");
+                        $"Loaded {configs.Count} unique configs.");
 
-                    Console.WriteLine();
-                    Console.WriteLine("Testing configs...");
-                    Console.WriteLine();
-
-                    var results =
-                        await _benchmarkService.FindAllFastProxiesAsync(
+                    var workingConfigs =
+                        await _benchmarkService.FindReachableProxiesAsync(
                             configs,
                             ct);
-
-                    var workingConfigs = results
-                        .OrderBy(x => x.LatencyMs)
-                        .ToList();
 
                     Console.WriteLine();
                     Console.WriteLine("========================================");
@@ -99,18 +105,7 @@ namespace XrayProxyWorker.Workers
                     {
                         foreach (var item in workingConfigs)
                         {
-                            var url = item.Config.Url;
-
-                            int hashIndex = url.IndexOf('#');
-
-                            if (hashIndex >= 0)
-                            {
-                                url = url[..hashIndex];
-                            }
-
-                            url += "#telegram@connect_iran";
-
-                            Console.WriteLine(url);
+                            Console.WriteLine(BuildOutputUrl(item.Config.Url));
                         }
                     }
 
@@ -134,10 +129,59 @@ namespace XrayProxyWorker.Workers
                     Console.WriteLine(
                         $"ERROR: {ex.Message}");
                     Console.WriteLine();
+
+                    if (!interactive)
+                        break;
                 }
             }
 
             Console.WriteLine("Shutting down...");
+        }
+
+        /// <summary>
+        /// Fetches every configured source and merges the results into a
+        /// deduplicated list - duplicates are removed before any testing
+        /// starts, across sources and across differing remarks.
+        /// </summary>
+        private async Task<List<V2RayConfig>> LoadConfigsFromSourcesAsync(
+            List<string> sources,
+            CancellationToken ct)
+        {
+            var allConfigs = new List<V2RayConfig>();
+
+            foreach (string source in sources)
+            {
+                if (!source.TryGetRawContentUrl(out string rawUrl))
+                {
+                    Console.WriteLine(
+                        $"Skipped invalid source URL: {source}");
+
+                    continue;
+                }
+
+                List<V2RayConfig> configs =
+                    await _configService.GetConfigsAsync(rawUrl);
+
+                allConfigs.AddRange(configs);
+            }
+
+            return allConfigs
+                .DistinctBy(c =>
+                    c.Url.ToNormalizedProxyKey(),
+                    StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private static string BuildOutputUrl(string url)
+        {
+            int hashIndex = url.IndexOf('#');
+
+            if (hashIndex >= 0)
+            {
+                url = url[..hashIndex];
+            }
+
+            return url + "#telegram@connect_iran";
         }
     }
 }

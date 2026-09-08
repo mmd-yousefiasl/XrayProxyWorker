@@ -4,6 +4,10 @@ namespace XrayProxyWorker.Dtos
     {
         public int MaxConfigs { get; set; } = 500;
 
+        public List<string> Sources { get; set; } = new();
+
+        public int BatchSize { get; set; } = 50;
+
         public int PortPoolStart { get; set; } = 20000;
 
         public int ReachabilityConcurrency { get; set; } = 100;

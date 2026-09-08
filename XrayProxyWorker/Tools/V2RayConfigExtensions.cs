@@ -246,10 +246,16 @@ namespace XrayProxyWorker.Extensions
                     config,
                     "alpn");
 
+                // NOTE: In VMess JSON, "type" is the TCP header obfuscation
+                // type ("none"/"http"), NOT the network. The network is
+                // copied above into Parameters["type"] - so this must be
+                // stored under a different key or it overwrites the network.
+
                 CopyJsonString(
                     root,
                     config,
-                    "type");
+                    "type",
+                    "headerType");
 
                 CopyJsonString(
                     root,
@@ -512,14 +518,19 @@ namespace XrayProxyWorker.Extensions
                 return;
             }
 
-            if (element.ValueKind !=
-                JsonValueKind.String)
-            {
-                return;
-            }
+            // Fields like "aid" and "port" frequently appear as JSON
+            // numbers in vmess links - stringify them instead of dropping.
 
-            string value =
-                element.GetString() ?? "";
+            string? value = element.ValueKind switch
+            {
+                JsonValueKind.String =>
+                    element.GetString(),
+
+                JsonValueKind.Number =>
+                    element.GetRawText(),
+
+                _ => null
+            };
 
             if (!string.IsNullOrWhiteSpace(value))
             {
@@ -527,6 +538,33 @@ namespace XrayProxyWorker.Extensions
                     parameterName ?? propertyName] =
                     value;
             }
+        }
+
+        // =========================================================
+        // Duplicate detection
+        // =========================================================
+
+        /// <summary>
+        /// Canonical dedupe key for a proxy link: trims whitespace and
+        /// drops the '#remark' fragment so the same proxy listed under
+        /// different names collapses to one entry.
+        /// </summary>
+        public static string ToNormalizedProxyKey(
+            this string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+                return string.Empty;
+
+            url = url.Trim();
+
+            int hashIndex = url.IndexOf('#');
+
+            if (hashIndex >= 0)
+            {
+                url = url[..hashIndex];
+            }
+
+            return url.ToLowerInvariant();
         }
 
         // =========================================================

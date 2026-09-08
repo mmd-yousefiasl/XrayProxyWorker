@@ -252,6 +252,25 @@ namespace XrayProxyWorker.Services.Implementations
                             user["level"] = levelValue;
                         }
 
+                        // Older VMess servers still issue non-zero alterIds;
+                        // omitting it defaults to 0 and the handshake fails.
+
+                        if (protocol == "vmess")
+                        {
+                            string? aid =
+                                GetParameter(
+                                    proxy,
+                                    "aid",
+                                    "alterId");
+
+                            if (!string.IsNullOrWhiteSpace(aid) &&
+                                int.TryParse(aid, out var alterId) &&
+                                alterId > 0)
+                            {
+                                user["alterId"] = alterId;
+                            }
+                        }
+
                         return new
                         {
                             vnext = new[]
@@ -355,15 +374,23 @@ namespace XrayProxyWorker.Services.Implementations
             // Validate transport
             // ---------------------------------------------------------
 
+            // ---------------------------------------------------------
+            // NOTE: Xray 26.x removed the QUIC and HTTP/2 transports, so
+            // they must not reach the master config - a single rejected
+            // outbound makes the core refuse the whole file. "h2"/"http"
+            // links are mapped to xhttp (the official migration path);
+            // kcp is still supported by the core.
+            // ---------------------------------------------------------
+
             var allowedNetworks = new HashSet<string>
-{
-    "tcp",
-    "ws",
-    "grpc",
-    "httpupgrade",
-    "xhttp",
-    "quic"
-};
+            {
+                "tcp",
+                "ws",
+                "grpc",
+                "httpupgrade",
+                "xhttp",
+                "kcp"
+            };
 
             if (!allowedNetworks.Contains(network))
             {
@@ -393,6 +420,71 @@ namespace XrayProxyWorker.Services.Implementations
             if (security == "none" &&
                 network == "tcp")
             {
+                // TCP header obfuscation (vmess "type=http") still needs
+                // tcpSettings even without TLS.
+
+                string? headerType =
+                    GetParameter(proxy, "headerType");
+
+                if (network == "tcp" &&
+                    !string.IsNullOrWhiteSpace(headerType) &&
+                    headerType.Equals("http", StringComparison.OrdinalIgnoreCase))
+                {
+                    string? requestHost =
+                        GetParameter(proxy, "host");
+
+                    return new Dictionary<string, object?>
+                    {
+                        ["network"] = "tcp",
+                        ["security"] = "none",
+
+                        ["tcpSettings"] = new Dictionary<string, object?>
+                        {
+                            ["header"] = new Dictionary<string, object?>
+                            {
+                                ["type"] = "http",
+
+                                ["request"] = new Dictionary<string, object?>
+                                {
+                                    ["version"] = "1.1",
+
+                                    ["method"] = "GET",
+
+                                    ["path"] = new[]
+                                    {
+                                        GetParameter(proxy, "path") ?? "/"
+                                    },
+
+                                    ["headers"] = new Dictionary<string, object?>
+                                    {
+                                        ["Host"] = new[]
+                                        {
+                                            requestHost ?? proxy.Address
+                                        },
+
+                                        ["User-Agent"] = new[]
+                                        {
+                                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                                        },
+
+                                        ["Accept-Encoding"] = new[]
+                                        {
+                                            "gzip, deflate"
+                                        },
+
+                                        ["Connection"] = new[]
+                                        {
+                                            "keep-alive"
+                                        },
+
+                                        ["Pragma"] = "no-cache"
+                                    }
+                                }
+                            }
+                        }
+                    };
+                }
+
                 return null;
             }
 
@@ -670,6 +762,11 @@ namespace XrayProxyWorker.Services.Implementations
         {
             return network switch
             {
+                // Xray 26.x removed the h2 transport; xhttp is the
+                // official migration path (stream-one H2).
+
+                "h2" => "xhttp",
+
                 "http" => "xhttp",
 
                 "splithttp" => "xhttp",

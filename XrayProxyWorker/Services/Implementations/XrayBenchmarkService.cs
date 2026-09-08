@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using XrayProxyWorker.Dtos;
 using XrayProxyWorker.Dtos.XrayProxyWorker.Dtos;
+using XrayProxyWorker.Extensions;
 using XrayProxyWorker.Services.Interfaces;
 
 namespace XrayProxyWorker.Services.Implementations
@@ -222,6 +223,198 @@ namespace XrayProxyWorker.Services.Implementations
             }
             finally
             {
+                try
+                {
+                    if (process != null && !process.HasExited)
+                    {
+                        process.Kill(true);
+                        process.WaitForExit(3000);
+                    }
+                }
+                catch
+                {
+                }
+                finally
+                {
+                    process?.Dispose();
+                }
+
+                try
+                {
+                    if (File.Exists(configPath))
+                        File.Delete(configPath);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        /// <summary>
+        /// Ping-only benchmark. Configs are chunked into batches so each
+        /// one spins up its own short-lived Xray engine - the listening
+        /// sockets are released when the process dies and the same port
+        /// pool is reused for the next batch. System load stays flat no
+        /// matter how many configs come in.
+        /// </summary>
+        public async Task<List<ProxyBenchmarkResult>> FindReachableProxiesAsync(
+            List<V2RayConfig> configs,
+            CancellationToken ct)
+        {
+            if (configs == null || configs.Count == 0)
+                return new();
+
+            var uniqueConfigs = configs
+                .Where(c => !string.IsNullOrWhiteSpace(c.Url))
+                .GroupBy(
+                    c => c.Url.ToNormalizedProxyKey(),
+                    StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .Take(_options.MaxConfigs)
+                .ToList();
+
+            if (uniqueConfigs.Count == 0)
+                return new();
+
+            int batchSize =
+                Math.Max(1, _options.BatchSize);
+
+            int totalBatches =
+                (int)Math.Ceiling(
+                    uniqueConfigs.Count / (double)batchSize);
+
+            var working = new List<ProxyBenchmarkResult>();
+
+            for (int batchIndex = 0; batchIndex < totalBatches; batchIndex++)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var batch = uniqueConfigs
+                    .Skip(batchIndex * batchSize)
+                    .Take(batchSize)
+                    .ToList();
+
+                var batchResults =
+                    await TestBatchReachabilityAsync(
+                        batch,
+                        $"Batch {batchIndex + 1}/{totalBatches}",
+                        ct);
+
+                working.AddRange(batchResults);
+            }
+
+            return working
+                .OrderBy(x => x.LatencyMs)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Runs the reachability phase for one batch against a dedicated
+        /// Xray engine, then tears it down before returning.
+        /// </summary>
+        private async Task<List<ProxyBenchmarkResult>> TestBatchReachabilityAsync(
+            List<V2RayConfig> batch,
+            string label,
+            CancellationToken ct)
+        {
+            string configPath = Path.Combine(
+                AppContext.BaseDirectory,
+                "base_config.json");
+
+            Process? process = null;
+
+            try
+            {
+                var generated = _configGenerator.GenerateMasterConfig(
+                    batch,
+                    configPath,
+                    _options.PortPoolStart);
+
+                if (generated.Count == 0)
+                {
+                    _logger.LogWarning(
+                        "No valid proxies were generated for {Label}.",
+                        label);
+
+                    return new();
+                }
+
+                bool configValid =
+                    await _processManager.ValidateConfigAsync(
+                        configPath,
+                        ct);
+
+                if (!configValid)
+                {
+                    _logger.LogError(
+                        "Generated Xray configuration is invalid. {Label} aborted.",
+                        label);
+
+                    return new();
+                }
+
+                process = _processManager.StartXrayEngine(configPath);
+
+                if (!process.Start())
+                {
+                    _logger.LogError(
+                        "Unable to start Xray for {Label}.",
+                        label);
+
+                    return new();
+                }
+
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+
+                bool ready =
+                    await _processManager.WaitUntilReadyAsync(
+                        process,
+                        generated[0].Port,
+                        TimeSpan.FromSeconds(
+                            _options.XrayStartupTimeoutSeconds),
+                        ct);
+
+                if (!ready)
+                {
+                    _logger.LogError(
+                        "Xray was not ready in time. {Label} aborted.",
+                        label);
+
+                    return new();
+                }
+
+                var reachable = await RunPhaseAsync<ReachableProxy>(
+                    generated,
+                    _options.ReachabilityConcurrency,
+                    label,
+                    async proxy =>
+                    {
+                        var test =
+                            await _tester.TestReachabilityAsync(
+                                proxy.Port,
+                                ct);
+
+                        return test.Success
+                            ? new ReachableProxy(
+                                proxy,
+                                test.LatencyMs)
+                            : null;
+                    },
+                    ct);
+
+                return reachable
+                    .Select(x => new ProxyBenchmarkResult(
+                        x.Proxy.Config,
+                        x.LatencyMs,
+                        0))
+                    .ToList();
+            }
+            finally
+            {
+                // The process kill must complete before the next batch
+                // rebinds the same ports, so wait for the exit.
+
                 try
                 {
                     if (process != null && !process.HasExited)

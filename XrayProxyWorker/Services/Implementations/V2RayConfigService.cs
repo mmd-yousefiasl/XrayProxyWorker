@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Options;
+﻿using System.Text;
+using Microsoft.Extensions.Options;
 using XrayProxyWorker.Dtos;
 using XrayProxyWorker.Dtos.XrayProxyWorker.Dtos;
 using XrayProxyWorker.Extensions;
@@ -41,6 +42,22 @@ namespace XrayProxyWorker.Services.Implementations
                 if (string.IsNullOrWhiteSpace(rawContent))
                     return new List<V2RayConfig>();
 
+                // Most subscriptions are base64-encoded blobs of links.
+                // If none of the supported schemes appear in the raw
+                // content, try decoding the whole body once.
+
+                if (!protocols.Any(p =>
+                        rawContent.Contains(
+                            p,
+                            StringComparison.OrdinalIgnoreCase)))
+                {
+                    string decoded =
+                        TryDecodeBase64(rawContent);
+
+                    if (!string.IsNullOrWhiteSpace(decoded))
+                        rawContent = decoded;
+                }
+
                 var lines = rawContent
                     .Split(
                         new[] { "\r\n", "\r", "\n" },
@@ -57,7 +74,7 @@ namespace XrayProxyWorker.Services.Implementations
                     .Where(config => config is not null)
                     .Cast<V2RayConfig>()
                     .DistinctBy(c =>
-                       NormalizeProxyUrl(c.Url),
+                       c.Url.ToNormalizedProxyKey(),
                        StringComparer.OrdinalIgnoreCase)
                     .Take(MaxConfigs)
                     .ToList();
@@ -80,22 +97,42 @@ namespace XrayProxyWorker.Services.Implementations
             }
         }
 
-        private static string NormalizeProxyUrl(string? url)
+        private static string TryDecodeBase64(string content)
         {
-            if (string.IsNullOrWhiteSpace(url))
-                return string.Empty;
-
-            url = url.Trim();
-
-            // Remove remark
-            int hashIndex = url.IndexOf('#');
-
-            if (hashIndex >= 0)
+            try
             {
-                url = url[..hashIndex];
-            }
+                string normalized =
+                    content
+                        .Trim()
+                        .Replace("\r", "")
+                        .Replace("\n", "")
+                        .Replace(" ", "+")
+                        .Replace("-", "+")
+                        .Replace("_", "/");
 
-            return url.ToLowerInvariant();
+                while (normalized.Length % 4 != 0)
+                {
+                    normalized += "=";
+                }
+
+                byte[] bytes =
+                    Convert.FromBase64String(normalized);
+
+                string decoded =
+                    Encoding.UTF8.GetString(bytes);
+
+                // Sanity check: decoding random text must not win.
+
+                return decoded.Contains(
+                    "://",
+                    StringComparison.OrdinalIgnoreCase)
+                    ? decoded
+                    : string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
     }
 }
