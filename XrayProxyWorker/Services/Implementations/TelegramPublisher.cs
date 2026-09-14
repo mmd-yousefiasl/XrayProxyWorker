@@ -27,11 +27,11 @@ namespace XrayProxyWorker.Services.Implementations
         {
             if (topTen == null || !topTen.Any())
             {
-                _logger.LogWarning("Telegram broadcast skipped: Top 10 proxy list is empty.");
+                //_logger.LogWarning("Telegram broadcast skipped: Top 10 proxy list is empty.");
                 return;
             }
 
-            _logger.LogInformation("Formatting safe full-width template for Telegram channel...");
+            //_logger.LogInformation("Formatting safe full-width template for Telegram channel...");
 
             var configListSb = new System.Text.StringBuilder();
             var itemsToProcess = topTen.Take(10).ToList();
@@ -82,7 +82,7 @@ namespace XrayProxyWorker.Services.Implementations
 
                 try
                 {
-                    _logger.LogInformation("Sending HTTP request POST to Worker (Attempt {Attempt}/{Max})", attempt, maxRetries);
+                    //_logger.LogInformation("Sending HTTP request POST to Worker (Attempt {Attempt}/{Max})", attempt, maxRetries);
 
                     // ساختن دقیق درخواست با ویژگی‌های شبیه‌ساز مرورگر و اجبار استفاده از HTTP/2
                     var request = new HttpRequestMessage(HttpMethod.Post, "https://flat-sunset-4db4.mmdyousefi95.workers.dev/send")
@@ -111,12 +111,12 @@ namespace XrayProxyWorker.Services.Implementations
 
                     if (response.IsSuccessStatusCode)
                     {
-                        _logger.LogInformation("Successfully broadcasted all verified configs safely on attempt {Attempt}.", attempt);
+                        //_logger.LogInformation("Successfully broadcasted all verified configs safely on attempt {Attempt}.", attempt);
                         return;
                     }
 
                     string errorResponseJson = await response.Content.ReadAsStringAsync(ct);
-                    _logger.LogWarning("Worker responded with error code {StatusCode}: {ErrorDetails}", response.StatusCode, errorResponseJson);
+                    //_logger.LogWarning("Worker responded with error code {StatusCode}: {ErrorDetails}", response.StatusCode, errorResponseJson);
 
                     if ((int)response.StatusCode == 422 || response.StatusCode == HttpStatusCode.BadRequest)
                     {
@@ -125,7 +125,7 @@ namespace XrayProxyWorker.Services.Implementations
                 }
                 catch (Exception ex) when (ex is TaskCanceledException || ex is HttpRequestException || ex is TimeoutException)
                 {
-                    _logger.LogWarning("Attempt {Attempt} timed out or met network turbulence. Exception: {Message}", attempt, ex.Message);
+                    //_logger.LogWarning("Attempt {Attempt} timed out or met network turbulence. Exception: {Message}", attempt, ex.Message);
                 }
 
                 if (attempt < maxRetries)
@@ -134,7 +134,7 @@ namespace XrayProxyWorker.Services.Implementations
                 }
             }
 
-            _logger.LogError("All {MaxRetries} attempts to broadcast configurations were exhausted due to network routing limits.", maxRetries);
+            //_logger.LogError("All {MaxRetries} attempts to broadcast configurations were exhausted due to network routing limits.", maxRetries);
         }
 
         private string UpdateConfigName(string url, string newName)

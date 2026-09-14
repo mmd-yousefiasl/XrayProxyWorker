@@ -66,14 +66,12 @@ namespace XrayProxyWorker.Services.Implementations
 
                 if (generated.Count == 0)
                 {
-                    _logger.LogWarning(
-                        "No valid proxies were generated.");
+                    //_logger.LogWarning("No valid proxies were generated.");
 
                     return new();
                 }
 
-                _logger.LogInformation(
-                    "Validating generated Xray configuration...");
+                //_logger.LogInformation("Validating generated Xray configuration...");
 
                 bool configValid =
                     await _processManager.ValidateConfigAsync(
@@ -82,14 +80,12 @@ namespace XrayProxyWorker.Services.Implementations
 
                 if (!configValid)
                 {
-                    _logger.LogError(
-                        "Generated Xray configuration is invalid. Benchmark aborted.");
+                    //_logger.LogError("Generated Xray configuration is invalid. Benchmark aborted.");
 
                     return new();
                 }
 
-                _logger.LogInformation(
-                    "Xray configuration is valid.");
+                //_logger.LogInformation("Xray configuration is valid.");
 
                 process = _processManager.StartXrayEngine(configPath);
 
@@ -332,9 +328,7 @@ namespace XrayProxyWorker.Services.Implementations
 
                 if (generated.Count == 0)
                 {
-                    _logger.LogWarning(
-                        "No valid proxies were generated for {Label}.",
-                        label);
+                    //_logger.LogWarning("No valid proxies were generated for {Label}.",label);
 
                     return new();
                 }
@@ -346,9 +340,7 @@ namespace XrayProxyWorker.Services.Implementations
 
                 if (!configValid)
                 {
-                    _logger.LogError(
-                        "Generated Xray configuration is invalid. {Label} aborted.",
-                        label);
+                    //_logger.LogError("Generated Xray configuration is invalid. {Label} aborted.",label);
 
                     return new();
                 }
@@ -357,9 +349,7 @@ namespace XrayProxyWorker.Services.Implementations
 
                 if (!process.Start())
                 {
-                    _logger.LogError(
-                        "Unable to start Xray for {Label}.",
-                        label);
+                    //_logger.LogError("Unable to start Xray for {Label}.",label);
 
                     return new();
                 }

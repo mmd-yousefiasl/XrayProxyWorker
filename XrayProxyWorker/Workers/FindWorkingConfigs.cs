@@ -49,14 +49,18 @@ namespace XrayProxyWorker.Workers
                 if (interactive)
                 {
                     Console.Write(
-                        "Press any key to start testing (Esc to quit)... ");
+                        "Press 1 to start testing (Esc to quit)... ");
 
                     try
                     {
-                        if (Console.ReadKey(intercept: true).Key ==
-                            ConsoleKey.Escape)
+                        var key = Console.ReadKey(intercept: true).Key;
+                        if (key == ConsoleKey.Escape)
                         {
                             break;
+                        }
+                        if (key != ConsoleKey.D1 && key != ConsoleKey.NumPad1)
+                        {
+                            continue;
                         }
                     }
                     catch (InvalidOperationException)
