@@ -588,27 +588,28 @@ namespace XrayProxyWorker.Extensions
 
             url = url.Trim();
 
-            if (Uri.TryCreate(
-                    url,
-                    UriKind.Absolute,
-                    out var uri) &&
+            // Already a raw.githubusercontent.com URL?
+            if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
                 uri.Scheme is "http" or "https" &&
-                uri.Host.Equals(
-                    "raw.githubusercontent.com",
-                    StringComparison.OrdinalIgnoreCase))
+                uri.Host.Equals("raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase))
             {
-                rawUrl = uri.ToString();
-                return true;
+                // raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}
+                var p = uri.AbsolutePath.TrimStart('/').Split('/', 4);
+                if (p.Length == 4)
+                {
+                    rawUrl = $"https://gh-proxy.com/https://raw.githubusercontent.com/{p[0]}/{p[1]}/{p[2]}/{p[3]}";
+                    return true;
+                }
+                return false;
             }
 
-            var match =
-                GitHubFileRegex.Match(url);
-
+            // github.com/{owner}/{repo}/{blob|raw}/{branch}/{path}
+            var match = GitHubFileRegex.Match(url);
             if (!match.Success)
                 return false;
 
             rawUrl =
-                $"https://raw.githubusercontent.com/" +
+                $"https://gh-proxy.com/https://raw.githubusercontent.com/" +
                 $"{match.Groups["owner"].Value}/" +
                 $"{match.Groups["repo"].Value}/" +
                 $"{match.Groups["branch"].Value}/" +

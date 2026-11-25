@@ -108,7 +108,7 @@ namespace XrayProxyWorker.Services.Implementations
                             proxy,
                             port));
                 }
-                catch (Exception ex)
+                catch
                 {
                     //_logger.LogWarning(ex,"Failed to generate outbound for config: {Url}",proxy.Url);
                 }

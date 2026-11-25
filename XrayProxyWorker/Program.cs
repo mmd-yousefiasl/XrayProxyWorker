@@ -8,6 +8,7 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Services.Configure<BenchmarkOptions>(
     builder.Configuration.GetSection("Benchmark"));
 
+
 builder.Services.AddHttpClient<IV2RayConfigService, V2RayConfigService>();
 
 builder.Services.AddSingleton<IProxyConfigValidator, ProxyConfigValidator>();
